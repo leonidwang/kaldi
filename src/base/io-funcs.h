@@ -2,6 +2,7 @@
 
 // Copyright 2009-2011  Microsoft Corporation;  Saarland University;
 //                      Jan Silovsky;   Yanmin Qian
+//                2016  Xiaohui Zhang
 
 // See ../../COPYING for clarification regarding multiple authors
 //
@@ -30,7 +31,9 @@
 #include <cctype>
 #include <vector>
 #include <string>
+
 #include "base/kaldi-common.h"
+#include "base/io-funcs-inl.h"
 
 namespace kaldi {
 
@@ -43,7 +46,7 @@ namespace kaldi {
   We also want to have control over whitespace in text mode without affecting
   the meaning of the file, for pretty-printing purposes.
 
-  Errors are handled by throwing an exception (std::runtime_error).
+  Errors are handled by throwing a KaldiFatalError exception.
 
   For integer and floating-point types (and boolean values):
 
@@ -98,7 +101,6 @@ namespace kaldi {
     void ReadToken(std::istream &is, bool binary, std::string *str);
     void PeekToken(std::istream &is, bool binary, std::string *str);
 
-
   WriteToken writes the token and one space (whether in binary or text mode).
 
   Peek returns the first character of the next token, by consuming whitespace
@@ -106,7 +108,7 @@ namespace kaldi {
   it doesn't throw.  It's useful if a class can have various forms based on
   typedefs and virtual classes, and wants to know which version to read.
 
-  ReadToken allow the caller to obtain the next token.  PeekToken works just
+  ReadToken allows the caller to obtain the next token.  PeekToken works just
   like ReadToken, but seeks back to the beginning of the token.  A subsequent
   call to ReadToken will read the same token again.  This is useful when
   different object types are written to the same file; using PeekToken one can
@@ -182,6 +184,16 @@ template<class T> inline void WriteIntegerVector(std::ostream &os, bool binary,
 template<class T> inline void ReadIntegerVector(std::istream &is, bool binary,
                                                 std::vector<T> *v);
 
+/// Function for writing STL vectors of pairs of integer types.
+template<class T>
+inline void WriteIntegerPairVector(std::ostream &os, bool binary,
+                                   const std::vector<std::pair<T, T> > &v);
+
+/// Function for reading STL vector of pairs of integer types.
+template<class T>
+inline void ReadIntegerPairVector(std::istream &is, bool binary,
+                                  std::vector<std::pair<T, T> > *v);
+
 /// The WriteToken functions are for writing nonempty sequences of non-space
 /// characters. They are not for general strings.
 void WriteToken(std::ostream &os, bool binary, const char *token);
@@ -191,13 +203,18 @@ void WriteToken(std::ostream &os, bool binary, const std::string & token);
 /// value of the stream.
 int Peek(std::istream &is, bool binary);
 
-/// ReadToken gets the next token and puts it in str (exception on failure).
+/// ReadToken gets the next token and puts it in str (exception on failure). If
+/// PeekToken() had been previously called, it is possible that the stream had
+/// failed to unget the starting '<' character. In this case ReadToken() returns
+/// the token string without the leading '<'. You must be prepared to handle
+/// this case. ExpectToken() handles this internally, and is not affected.
 void ReadToken(std::istream &is, bool binary, std::string *token);
 
 /// PeekToken will return the first character of the next token, or -1 if end of
 /// file.  It's the same as Peek(), except if the first character is '<' it will
-/// skip over it and will return the next character.  It will unget the '<' so
-/// the stream is where it was before you did PeekToken().
+/// skip over it and will return the next character. It will attempt to unget
+/// the '<' so the stream is where it was before you did PeekToken(), however,
+/// this is not guaranteed (see ReadToken()).
 int PeekToken(std::istream &is, bool binary);
 
 /// ExpectToken tries to read in the given token, and throws an exception
@@ -225,7 +242,4 @@ inline void InitKaldiOutputStream(std::ostream &os, bool binary);
 inline bool InitKaldiInputStream(std::istream &is, bool *binary);
 
 }  // end namespace kaldi.
-
-#include "base/io-funcs-inl.h"
-
 #endif  // KALDI_BASE_IO_FUNCS_H_

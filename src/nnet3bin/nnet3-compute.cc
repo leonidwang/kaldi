@@ -21,7 +21,7 @@
 
 #include "base/kaldi-common.h"
 #include "util/common-utils.h"
-#include "nnet3/nnet-simple-computer.h"
+#include "nnet3/nnet-am-decodable-simple.h"
 #include "base/timer.h"
 #include "nnet3/nnet-utils.h"
 
@@ -31,6 +31,7 @@ int main(int argc, char *argv[]) {
     using namespace kaldi;
     using namespace kaldi::nnet3;
     typedef kaldi::int32 int32;
+    typedef kaldi::int64 int64;
 
     const char *usage =
         "Propagate the features through raw neural network model "
@@ -38,25 +39,26 @@ int main(int argc, char *argv[]) {
         "If --apply-exp=true, apply the Exp() function to the output "
         "before writing it out.\n"
         "\n"
-        "Usage: nnet3-compute [options] <raw-nnet-in> <features-rspecifier> <matrix-wspecifier>\n"
+        "Usage: nnet3-compute [options] <nnet-in> <features-rspecifier> <matrix-wspecifier>\n"
         " e.g.: nnet3-compute final.raw scp:feats.scp ark:nnet_prediction.ark\n"
-        "See also: nnet3-compute-from-egs\n";
+        "See also: nnet3-compute-from-egs, nnet3-chain-compute-post\n"
+        "Note: this program does not currently make very efficient use of the GPU.\n";
 
     ParseOptions po(usage);
     Timer timer;
-    
-    NnetSimpleComputerOptions opts;
-        
-    bool apply_exp = false;
+
+    NnetSimpleComputationOptions opts;
+    opts.acoustic_scale = 1.0; // by default do no scaling.
+
+    bool apply_exp = false, use_priors = false;
     std::string use_gpu = "yes";
-    
-    std::string word_syms_filename;
+
     std::string ivector_rspecifier,
                 online_ivector_rspecifier,
                 utt2spk_rspecifier;
     int32 online_ivector_period = 0;
     opts.Register(&po);
-    
+
     po.Register("ivectors", &ivector_rspecifier, "Rspecifier for "
                 "iVectors as vectors (i.e. not estimated online); per utterance "
                 "by default, or per speaker if you provide the --utt2spk option.");
@@ -72,9 +74,16 @@ int main(int argc, char *argv[]) {
                 "output");
     po.Register("use-gpu", &use_gpu,
                 "yes|no|optional|wait, only has effect if compiled with CUDA");
-    
+    po.Register("use-priors", &use_priors, "If true, subtract the logs of the "
+                "priors stored with the model (in this case, "
+                "a .mdl file is expected as input).");
+
+#if HAVE_CUDA==1
+    CuDevice::RegisterDeviceOptions(&po);
+#endif
+
     po.Read(argc, argv);
-    
+
     if (po.NumArgs() != 3) {
       po.PrintUsage();
       exit(1);
@@ -87,24 +96,40 @@ int main(int argc, char *argv[]) {
     std::string nnet_rxfilename = po.GetArg(1),
                 feature_rspecifier = po.GetArg(2),
                 matrix_wspecifier = po.GetArg(3);
- 
-    Nnet nnet;
-    ReadKaldiObject(nnet_rxfilename, &nnet);
+
+    Nnet raw_nnet;
+    AmNnetSimple am_nnet;
+    if (use_priors) {
+      bool binary;
+      TransitionModel trans_model;
+      Input ki(nnet_rxfilename, &binary);
+      trans_model.Read(ki.Stream(), binary);
+      am_nnet.Read(ki.Stream(), binary);
+    } else {
+      ReadKaldiObject(nnet_rxfilename, &raw_nnet);
+    }
+    Nnet &nnet = (use_priors ? am_nnet.GetNnet() : raw_nnet);
+    SetBatchnormTestMode(true, &nnet);
+    SetDropoutTestMode(true, &nnet);
+    CollapseModel(CollapseModelConfig(), &nnet);
+
+    Vector<BaseFloat> priors;
+    if (use_priors)
+      priors = am_nnet.Priors();
 
     RandomAccessBaseFloatMatrixReader online_ivector_reader(
         online_ivector_rspecifier);
     RandomAccessBaseFloatVectorReaderMapped ivector_reader(
         ivector_rspecifier, utt2spk_rspecifier);
-    
+
+    CachingOptimizingCompiler compiler(nnet, opts.optimize_config);
+
     BaseFloatMatrixWriter matrix_writer(matrix_wspecifier);
 
     int32 num_success = 0, num_fail = 0;
     int64 frame_count = 0;
 
     SequentialBaseFloatMatrixReader feature_reader(feature_rspecifier);
-      
-    int32 left_context = 0, right_context = 0;
-    ComputeSimpleNnetContext(nnet, &left_context, &right_context);
 
     for (; !feature_reader.Done(); feature_reader.Next()) {
       std::string utt = feature_reader.Key();
@@ -134,16 +159,19 @@ int main(int argc, char *argv[]) {
           online_ivectors = &online_ivector_reader.Value(utt);
         }
       }
-          
-      NnetSimpleComputer nnet_computer(
-          opts, nnet,
-          features, 
-          left_context, right_context,
+
+      DecodableNnetSimple nnet_computer(
+          opts, nnet, priors,
+          features, &compiler,
           ivector, online_ivectors,
           online_ivector_period);
 
-      Matrix<BaseFloat> matrix;
-      nnet_computer.GetOutput(&matrix);
+      Matrix<BaseFloat> matrix(nnet_computer.NumFrames(),
+                               nnet_computer.OutputDim());
+      for (int32 t = 0; t < nnet_computer.NumFrames(); t++) {
+        SubVector<BaseFloat> row(matrix, t);
+        nnet_computer.GetOutputForFrame(t, &row);
+      }
 
       if (apply_exp)
         matrix.ApplyExp();
@@ -153,14 +181,17 @@ int main(int argc, char *argv[]) {
       frame_count += features.NumRows();
       num_success++;
     }
-      
+
+#if HAVE_CUDA==1
+    CuDevice::Instantiate().PrintProfile();
+#endif
     double elapsed = timer.Elapsed();
-    KALDI_LOG << "Time taken "<< elapsed 
+    KALDI_LOG << "Time taken "<< elapsed
               << "s: real-time factor assuming 100 frames/sec is "
               << (elapsed*100.0/frame_count);
     KALDI_LOG << "Done " << num_success << " utterances, failed for "
               << num_fail;
-    
+
     if (num_success != 0) return 0;
     else return 1;
   } catch(const std::exception &e) {

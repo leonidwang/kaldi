@@ -39,7 +39,7 @@ struct KaldiRnnlmWrapperOpts {
   void Register(OptionsItf *opts) {
     opts->Register("unk-symbol", &unk_symbol, "Symbol for out-of-vocabulary "
                    "words in rnnlm.");
-    opts->Register("eos-symbol", &eos_symbol, "End of setence symbol in "
+    opts->Register("eos-symbol", &eos_symbol, "End of sentence symbol in "
                    "rnnlm.");
   }
 };
@@ -56,8 +56,8 @@ class KaldiRnnlmWrapper {
   int32 GetEos() const { return eos_; }
 
   BaseFloat GetLogProb(int32 word, const std::vector<int32> &wseq,
-                       const std::vector<BaseFloat> &context_in,
-                       std::vector<BaseFloat> *context_out);
+                       const std::vector<float> &context_in,
+                       std::vector<float> *context_out);
 
  private:
   rnnlm::CRnnLM rnnlm_;
@@ -96,7 +96,7 @@ class RnnlmDeterministicFst
 
   KaldiRnnlmWrapper *rnnlm_;
   int32 max_ngram_order_;
-  std::vector<std::vector<BaseFloat> > state_to_context_;
+  std::vector<std::vector<float> > state_to_context_;
 };
 
 }  // namespace kaldi

@@ -20,54 +20,66 @@
 #define KALDI_BASE_TIMER_H_
 
 #include "base/kaldi-utils.h"
-// Note: Sleep(float secs) is included in base/kaldi-utils.h.
+#include "base/kaldi-error.h"
 
 
 #if defined(_MSC_VER) || defined(MINGW)
 
-namespace kaldi
-{
-
+namespace kaldi {
 class Timer {
  public:
   Timer() { Reset(); }
+
+  // You can initialize with bool to control whether or not you want the time to
+  // be set when the object is created.
+  explicit Timer(bool set_timer) { if (set_timer) Reset(); }
+
   void Reset() {
     QueryPerformanceCounter(&time_start_);
   }
-  double Elapsed() {
+  double Elapsed() const {
     LARGE_INTEGER time_end;
     LARGE_INTEGER freq;
     QueryPerformanceCounter(&time_end);
-    if (QueryPerformanceFrequency(&freq) == 0) return 0.0;  // Hardware does not support this.
-    return ((double)time_end.QuadPart - (double)time_start_.QuadPart) /
-        ((double)freq.QuadPart);
+
+    if (QueryPerformanceFrequency(&freq) == 0) {
+      //  Hardware does not support this.
+      return 0.0;
+    }
+    return (static_cast<double>(time_end.QuadPart) -
+            static_cast<double>(time_start_.QuadPart)) /
+           (static_cast<double>(freq.QuadPart));
   }
  private:
   LARGE_INTEGER time_start_;
 };
-}
+
 
 #else
+#include <sys/time.h>
+#include <unistd.h>
 
-# include <sys/time.h>
-# include <unistd.h>
-namespace kaldi
-{
-class Timer
-{
+namespace kaldi {
+class Timer {
  public:
   Timer() { Reset(); }
+
+  // You can initialize with bool to control whether or not you want the time to
+  // be set when the object is created.
+  explicit Timer(bool set_timer) { if (set_timer) Reset(); }
 
   void Reset() { gettimeofday(&this->time_start_, &time_zone_); }
 
   /// Returns time in seconds.
-  double Elapsed() {
+  double Elapsed() const {
     struct timeval time_end;
-    gettimeofday(&time_end, &time_zone_);
+    struct timezone time_zone;
+    gettimeofday(&time_end, &time_zone);
     double t1, t2;
-    t1 =  (double)time_start_.tv_sec +
-        (double)time_start_.tv_usec/(1000*1000);
-    t2 =  (double)time_end.tv_sec + (double)time_end.tv_usec/(1000*1000);
+    t1 =  static_cast<double>(time_start_.tv_sec) +
+          static_cast<double>(time_start_.tv_usec)/(1000*1000);
+    t2 =  static_cast<double>(time_end.tv_sec) +
+          static_cast<double>(time_end.tv_usec)/(1000*1000);
     return t2-t1;
   }
 
@@ -75,9 +87,29 @@ class Timer
   struct timeval time_start_;
   struct timezone time_zone_;
 };
-}
 
 #endif
 
+class Profiler {
+ public:
+  // Caution: the 'const char' should always be a string constant; for speed,
+  // internally the profiling code uses the address of it as a lookup key.
+  Profiler(const char *function_name): name_(function_name) { }
+  ~Profiler();
+ private:
+  Timer tim_;
+  const char *name_;
+};
 
-#endif
+//  To add timing info for a function, you just put
+//  KALDI_PROFILE;
+//  at the beginning of the function.  Caution: this doesn't
+//  include the class name.
+#define KALDI_PROFILE Profiler _profiler(__func__)
+
+
+
+}  // namespace kaldi
+
+
+#endif  // KALDI_BASE_TIMER_H_

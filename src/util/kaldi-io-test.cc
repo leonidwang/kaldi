@@ -16,13 +16,13 @@
 // MERCHANTABLITY OR NON-INFRINGEMENT.
 // See the Apache 2 License for the specific language governing permissions and
 // limitations under the License.
+#ifndef _MSC_VER
+#include <unistd.h>
+#endif
 #include "base/io-funcs.h"
 #include "util/kaldi-io.h"
 #include "base/kaldi-math.h"
 #include "base/kaldi-utils.h"
-#ifndef _MSC_VER
-#include <unistd.h>
-#endif
 
 namespace kaldi {
 
@@ -38,10 +38,14 @@ void UnitTestClassifyRxfilename() {
   KALDI_ASSERT(ClassifyRxfilename("b|") == kPipeInput);
   KALDI_ASSERT(ClassifyRxfilename("|b") == kNoInput);
   KALDI_ASSERT(ClassifyRxfilename("b c|") == kPipeInput);
+  KALDI_ASSERT(ClassifyRxfilename(" b c|") == kPipeInput);
   KALDI_ASSERT(ClassifyRxfilename("a b c:123") == kOffsetFileInput);
   KALDI_ASSERT(ClassifyRxfilename("a b c:3") == kOffsetFileInput);
   KALDI_ASSERT(ClassifyRxfilename("a b c:") == kFileInput);
   KALDI_ASSERT(ClassifyRxfilename("a b c/3") == kFileInput);
+  KALDI_ASSERT(ClassifyRxfilename("ark,s,cs:a b c") == kNoInput);
+  KALDI_ASSERT(ClassifyRxfilename("scp:a b c") == kNoInput);
+
 }
 
 
@@ -54,8 +58,11 @@ void UnitTestClassifyWxfilename() {
   KALDI_ASSERT(ClassifyWxfilename("-") == kStandardOutput);
   KALDI_ASSERT(ClassifyWxfilename("b|") == kNoOutput);
   KALDI_ASSERT(ClassifyWxfilename("|b") == kPipeOutput);
+  KALDI_ASSERT(ClassifyWxfilename("| b ") == kPipeOutput);
   KALDI_ASSERT(ClassifyWxfilename("b c|") == kNoOutput);
   KALDI_ASSERT(ClassifyWxfilename("a b c:123") == kNoOutput);
+  KALDI_ASSERT(ClassifyWxfilename("ark,s,cs:a b c") == kNoOutput);
+  KALDI_ASSERT(ClassifyWxfilename("scp:a b c") == kNoOutput);
   KALDI_ASSERT(ClassifyWxfilename("a b c:3") == kNoOutput);
   KALDI_ASSERT(ClassifyWxfilename("a b c:") == kFileOutput);
   KALDI_ASSERT(ClassifyWxfilename("a b c/3") == kFileOutput);
@@ -132,7 +139,7 @@ void UnitTestIoNew(bool binary) {
       ReadIntegerVector(infile, binary_in, &vec3_in);
       KALDI_ASSERT(vec3_in == vec3);
       std::string  token1_in, token2_in;
-      KALDI_ASSERT(Peek(infile, binary_in) == (int)*token1);
+      KALDI_ASSERT(Peek(infile, binary_in) == static_cast<int>(*token1));
       ReadToken(infile, binary_in, &token1_in);
       KALDI_ASSERT(token1_in == (std::string)token1);
       ReadToken(infile, binary_in, &token2_in);
@@ -245,7 +252,7 @@ void UnitTestIoPipe(bool binary) {
       ReadIntegerVector(infile, binary_in, &vec3_in);
       KALDI_ASSERT(vec3_in == vec3);
       std::string  token1_in, token2_in;
-      KALDI_ASSERT(Peek(infile, binary_in) == (int)*token1);
+      KALDI_ASSERT(Peek(infile, binary_in) == static_cast<int>(*token1));
       ReadToken(infile, binary_in, &token1_in);
       KALDI_ASSERT(token1_in == (std::string)token1);
       ReadToken(infile, binary_in, &token2_in);
@@ -357,6 +364,7 @@ int main(int argc, const char** argv) {
   UnitTestClassifyRxfilename();
   UnitTestClassifyWxfilename();
 
-  KALDI_ASSERT(1);  // just wanted to check that KALDI_ASSERT does not fail for 1.
+  KALDI_ASSERT(1);  // just wanted to check that KALDI_ASSERT does not fail
+  // for 1.
   return 0;
 }

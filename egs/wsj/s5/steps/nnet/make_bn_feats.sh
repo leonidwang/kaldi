@@ -1,4 +1,4 @@
-#!/bin/bash 
+#!/usr/bin/env bash
 
 # Copyright 2012-2015 Brno University of Technology (author: Karel Vesely)
 # Apache 2.0
@@ -32,7 +32,7 @@ if [ $# != 5 ]; then
    exit 1;
 fi
 
-if [ -f path.sh ]; then . path.sh; fi
+if [ -f path.sh ]; then . ./path.sh; fi
 
 data=$1
 srcdata=$2
@@ -44,7 +44,7 @@ bnfeadir=$5
 
 # copy the dataset metadata from srcdata.
 mkdir -p $data $logdir $bnfeadir || exit 1;
-utils/copy_data_dir.sh $srcdata $data; rm $data/{feats,cmvn}.scp 2>/dev/null
+utils/copy_data_dir.sh $srcdata $data; rm -f $data/{feats,cmvn}.scp 2>/dev/null
 
 # make $bnfeadir an absolute pathname.
 [ '/' != ${bnfeadir:0:1} ] && bnfeadir=$PWD/$bnfeadir
@@ -67,32 +67,41 @@ echo "Creating bn-feats into $data"
 
 # PREPARE FEATURE EXTRACTION PIPELINE
 # import config,
+online_cmvn_opts=
 cmvn_opts=
 delta_opts=
 D=$nndir
-[ -e $D/norm_vars ] && cmvn_opts="--norm-means=true --norm-vars=$(cat $D/norm_vars)" # Bwd-compatibility,
+[ -e $D/online_cmvn_opts ] && online_cmvn_opts=$(cat $D/online_cmvn_opts)
 [ -e $D/cmvn_opts ] && cmvn_opts=$(cat $D/cmvn_opts)
-[ -e $D/delta_order ] && delta_opts="--delta-order=$(cat $D/delta_order)" # Bwd-compatibility,
 [ -e $D/delta_opts ] && delta_opts=$(cat $D/delta_opts)
 #
 # Create the feature stream,
 feats="ark,s,cs:copy-feats scp:$sdata/JOB/feats.scp ark:- |"
+# apply-cmvn-online (optional),
+[ -n "$online_cmvn_opts" -a ! -f $nndir/global_cmvn_stats.mat ] && echo "$0: Missing $nndir/global_cmvn_stats.mat" && exit 1
+[ -n "$online_cmvn_opts" ] && feats="$feats apply-cmvn-online $online_cmvn_opts --spk2utt=ark:$srcdata/spk2utt $nndir/global_cmvn_stats.mat ark:- ark:- |"
 # apply-cmvn (optional),
-[ ! -z "$cmvn_opts" -a ! -f $sdata/1/cmvn.scp ] && echo "$0: Missing $sdata/1/cmvn.scp" && exit 1
-[ ! -z "$cmvn_opts" ] && feats="$feats apply-cmvn $cmvn_opts --utt2spk=ark:$srcdata/utt2spk scp:$srcdata/cmvn.scp ark:- ark:- |"
+[ -n "$cmvn_opts" -a ! -f $sdata/1/cmvn.scp ] && echo "$0: Missing $sdata/1/cmvn.scp" && exit 1
+[ -n "$cmvn_opts" ] && feats="$feats apply-cmvn $cmvn_opts --utt2spk=ark:$srcdata/utt2spk scp:$srcdata/cmvn.scp ark:- ark:- |"
 # add-deltas (optional),
-[ ! -z "$delta_opts" ] && feats="$feats add-deltas $delta_opts ark:- ark:- |"
-# add-pytel transform (optional),
-[ -e $D/pytel_transform.py ] && feats="$feats /bin/env python $D/pytel_transform.py |"
+[ -n "$delta_opts" ] && feats="$feats add-deltas $delta_opts ark:- ark:- |"
 
 # add-ivector (optional),
 if [ -e $D/ivector_dim ]; then
-  ivector_dim=$(cat $D/ivector_dim)
-  [ -z $ivector ] && echo "Missing --ivector, they were used in training! (dim $ivector_dim)" && exit 1
-  ivector_dim2=$(copy-vector --print-args=false "$ivector" ark,t:- | head -n1 | awk '{ print NF-3 }') || true
-  [ $ivector_dim != $ivector_dim2 ] && "Error, i-vector dimensionality mismatch! (expected $ivector_dim, got $ivector_dim2 in $ivector)" && exit 1
-  # Append to feats
-  feats="$feats append-vector-to-feats ark:- '$ivector' ark:- |"
+  [ -z $ivector ] && echo "Missing --ivector, they were used in training!" && exit 1
+  # Get the tool,
+  ivector_append_tool=append-vector-to-feats # default,
+  [ -e $D/ivector_append_tool ] && ivector_append_tool=$(cat $D/ivector_append_tool)
+  # Check dims,
+  feats_job_1=$(sed 's:JOB:1:g' <(echo $feats))
+  dim_raw=$(feat-to-dim "$feats_job_1" -)
+  dim_raw_and_ivec=$(feat-to-dim "$feats_job_1 $ivector_append_tool ark:- '$ivector' ark:- |" -)
+  dim_ivec=$((dim_raw_and_ivec - dim_raw))
+  [ $dim_ivec != "$(cat $D/ivector_dim)" ] && \
+    echo "Error, i-vector dim. mismatch (expected $(cat $D/ivector_dim), got $dim_ivec in '$ivector')" && \
+    exit 1
+  # Append to feats,
+  feats="$feats $ivector_append_tool ark:- '$ivector' ark:- |"
 fi
 
 if [ $htk_save == false ]; then
@@ -107,7 +116,7 @@ if [ $htk_save == false ]; then
   done
 
   # check sentence counts,
-  N0=$(cat $srcdata/feats.scp | wc -l) 
+  N0=$(cat $srcdata/feats.scp | wc -l)
   N1=$(cat $data/feats.scp | wc -l)
   [[ "$N0" != "$N1" ]] && echo "$0: sentence-count mismatch, $srcdata $N0, $data $N1" && exit 1
   echo "Succeeded creating MLP-BN features '$data'"

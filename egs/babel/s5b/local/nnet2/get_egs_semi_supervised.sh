@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Copyright 2012 Johns Hopkins University (Author: Daniel Povey)
 # Copyright 2014 Vimal Manohar
@@ -28,7 +28,7 @@ transform_dir_sup=     # If supplied, overrides alidir
 transform_dir_unsup=   
 num_jobs_nnet=16    # Number of neural net jobs to run in parallel
 stage=-10
-io_opts="-tc 5" # for jobs with a lot of I/O, limits the number running at one time. 
+io_opts="--max-jobs-run 5" # for jobs with a lot of I/O, limits the number running at one time. 
 splice_width=4 # meaning +- 4 frames on each side for second LDA
 spk_vecs_dir_sup=
 spk_vecs_dir_unsup=

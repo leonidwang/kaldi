@@ -36,15 +36,16 @@ template<class I, class T> HashList<I, T>::HashList() {
 
 template<class I, class T> void HashList<I, T>::SetSize(size_t size) {
   hash_size_ = size;
-  KALDI_ASSERT(list_head_ == NULL && bucket_list_tail_ == static_cast<size_t>(-1));  // make sure empty.
+  KALDI_ASSERT(list_head_ == NULL &&
+      bucket_list_tail_ == static_cast<size_t>(-1));  // make sure empty.
   if (size > buckets_.size())
     buckets_.resize(size, HashBucket(0, NULL));
 }
 
 template<class I, class T>
 typename HashList<I, T>::Elem* HashList<I, T>::Clear() {
-  // Clears the hashtable and gives ownership of the currently contained list to the
-  // user.
+  // Clears the hashtable and gives ownership of the currently contained list
+  // to the user.
   for (size_t cur_bucket = bucket_list_tail_;
       cur_bucket != static_cast<size_t>(-1);
       cur_bucket = buckets_[cur_bucket].prev_bucket) {
@@ -120,15 +121,24 @@ HashList<I, T>::~HashList() {
   }
 }
 
-
 template<class I, class T>
-void HashList<I, T>::Insert(I key, T val) {
+inline typename HashList<I, T>::Elem* HashList<I, T>::Insert(I key, T val) {
   size_t index = (static_cast<size_t>(key) % hash_size_);
   HashBucket &bucket = buckets_[index];
+  // Check the element is existing or not.
+  if (bucket.last_elem != NULL) {
+    Elem *head = (bucket.prev_bucket == static_cast<size_t>(-1) ?
+                  list_head_ :
+                  buckets_[bucket.prev_bucket].last_elem->tail),
+         *tail = bucket.last_elem->tail;
+    for (Elem *e = head; e != tail; e = e->tail)
+      if (e->key == key) return e;
+  }
+
+  // This is a new element. Insert it.
   Elem *elem = New();
   elem->key = key;
   elem->val = val;
-
   if (bucket.last_elem == NULL) {  // Unoccupied bucket.  Insert at
     // head of bucket list (which is tail of regular list, they go in
     // opposite directions).
@@ -151,6 +161,7 @@ void HashList<I, T>::Insert(I key, T val) {
     bucket.last_elem->tail = elem;
     bucket.last_elem = elem;
   }
+  return elem;
 }
 
 template<class I, class T>
@@ -161,23 +172,23 @@ void HashList<I, T>::InsertMore(I key, T val) {
   elem->key = key;
   elem->val = val;
 
-  KALDI_ASSERT(bucket.last_elem != NULL); // we assume there is already one element
-  if (bucket.last_elem->key == key) { // standard behavior: add as last element
+  KALDI_ASSERT(bucket.last_elem != NULL);  // assume one element is already here
+  if (bucket.last_elem->key == key) {  // standard behavior: add as last element
     elem->tail = bucket.last_elem->tail;
     bucket.last_elem->tail = elem;
     bucket.last_elem = elem;
     return;
-  } 
+  }
   Elem *e = (bucket.prev_bucket == static_cast<size_t>(-1) ?
              list_head_ : buckets_[bucket.prev_bucket].last_elem->tail);
-  // find place to insert in linked list 
+  // find place to insert in linked list
   while (e != bucket.last_elem->tail && e->key != key) e = e->tail;
-  KALDI_ASSERT(e->key == key); // not found? - should not happen
+  KALDI_ASSERT(e->key == key);  // not found? - should not happen
   elem->tail = e->tail;
   e->tail = elem;
 }
 
 
-} // end namespace kaldi
+}  // end namespace kaldi
 
-#endif
+#endif  // KALDI_UTIL_HASH_LIST_INL_H_

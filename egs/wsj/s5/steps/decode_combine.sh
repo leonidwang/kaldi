@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Copyright 2012  Johns Hopkins University (Author: Daniel Povey).  Apache 2.0.
 
@@ -47,7 +47,7 @@ mkdir -p $dir/log
 echo $nj > $dir/num_jobs
 
 # The lattice-interp command does the score interpolation (with composition),
-# and the lattice-copy-backoff replaces the result with the 1st lattice, in 
+# and the lattice-copy-backoff replaces the result with the 1st lattice, in
 # cases where the composed result was empty.
 $cmd JOB=1:$nj $dir/log/interp.JOB.log \
   lattice-interp --alpha=$weight1 "ark:gunzip -c $srcdir1/lat.JOB.gz|" \

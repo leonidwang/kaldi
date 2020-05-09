@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 
 # this (local/nnet2/run_6c_gpu.sh) trains a p-norm neural network on top of
@@ -21,7 +21,7 @@ EOF
 
 
 . utils/parse_options.sh
-parallel_opts="-l gpu=1"  # This is suitable for the CLSP network, you'll likely have to change it.
+parallel_opts="--gpu 1"  # This is suitable for the CLSP network, you'll likely have to change it.
 
 ( 
   if [ "$USER" == dpovey ]; then
@@ -34,7 +34,7 @@ parallel_opts="-l gpu=1"  # This is suitable for the CLSP network, you'll likely
     # note: 12 epochs is too many, it's taking a very long time.
     steps/nnet2/train_pnorm_simple2.sh --stage $train_stage \
       --num-epochs 12 \
-      --io-opts "-tc 10" \
+      --io-opts "--max-jobs-run 10" \
       --num-jobs-nnet 8 --num-threads 1 \
       --minibatch-size 512 --parallel-opts "$parallel_opts" \
       --mix-up 15000 \

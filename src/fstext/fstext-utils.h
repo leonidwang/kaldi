@@ -29,10 +29,9 @@
 #include <fst/fstlib.h>
 #include <fst/fst-decl.h>
 #include "fstext/determinize-star.h"
-#include "fstext/deterministic-fst.h"
 #include "fstext/remove-eps-local.h"
-#include "../base/kaldi-common.h" // for error reporting macros.
-#include "../util/text-utils.h" // for SplitStringToVector
+#include "base/kaldi-common.h" // for error reporting macros.
+#include "util/text-utils.h" // for SplitStringToVector
 #include "fst/script/print-impl.h"
 
 namespace fst {
@@ -57,14 +56,14 @@ typename Arc::StateId NumArcs(const ExpandedFst<Arc> &fst);
 template<class Arc, class I>
 void GetInputSymbols(const Fst<Arc> &fst,
                      bool include_eps,
-                     vector<I> *symbols);
+                     std::vector<I> *symbols);
 
 /// GetOutputSymbols gets the list of symbols on the output of fst
 /// (including epsilon, if include_eps == true)
 template<class Arc, class I>
 void GetOutputSymbols(const Fst<Arc> &fst,
                       bool include_eps,
-                      vector<I> *symbols);
+                      std::vector<I> *symbols);
 
 /// ClearSymbols sets all the symbols on the input and/or
 /// output side of the FST to zero, as specified.
@@ -77,7 +76,7 @@ void ClearSymbols(bool clear_input,
 template<class I>
 void GetSymbols(const SymbolTable &symtab,
                 bool include_eps,
-                vector<I> *syms_out);
+                std::vector<I> *syms_out);
 
 
 
@@ -117,7 +116,7 @@ void MinimizeEncoded(VectorFst<Arc> *fst, float delta = kDelta) {
   Map(fst, QuantizeMapper<Arc>(delta));
   EncodeMapper<Arc> encoder(kEncodeLabels | kEncodeWeights, ENCODE);
   Encode(fst, &encoder);
-  AcceptorMinimize(fst);
+  internal::AcceptorMinimize(fst);
   Decode(fst, encoder);
 }
 
@@ -130,44 +129,22 @@ void MinimizeEncoded(VectorFst<Arc> *fst, float delta = kDelta) {
 /// the total weight as "tot_weight". The total weight will be Weight::Zero()
 /// if the FST is empty.  If any of the output pointers are NULL, it does not
 /// create that output.
-
 template<class Arc, class I>
 bool GetLinearSymbolSequence(const Fst<Arc> &fst,
-                             vector<I> *isymbols_out,
-                             vector<I> *osymbols_out,
+                             std::vector<I> *isymbols_out,
+                             std::vector<I> *osymbols_out,
                              typename Arc::Weight *tot_weight_out);
-
-/// GetLinearSymbolSequence gets the symbol sequences and weights
-/// from an FST as output by the ShortestPath algorithm (called with
-/// some parameter n), which has up to n arcs out from the start state,
-/// and if you follow one of the arcs you enter a linear sequence of
-/// states.  This function outputs the info in a more N-best-list-like
-/// format.  It returns true if the FST had the expected structure,
-/// and false otherwise (note: an empty FST counts as having this
-/// structure).  We don't accept an FST that has a final-prob on the start
-/// state, as it wouldn't be clear whether to put it as the first or
-/// last path (this function is used in an N-best context where the
-/// paths' ordering is somewhat meaningful.)
-/// This function will set the output vectors to the appropriate
-/// size, and for each path will output the input and output symbols as
-/// vectors (not including epsilons).  It outputs the total weight
-/// for each path.
-template<class Arc, class I>
-bool GetLinearSymbolSequences(const Fst<Arc> &fst,
-                              vector<vector<I> > *isymbols_out,
-                              vector<vector<I> > *osymbols_out,
-                              vector<typename Arc::Weight> *tot_weight_out);
 
 
 /// This function converts an FST with a special structure, which is
 /// output by the OpenFst functions ShortestPath and RandGen, and converts
-/// them into a vector of separate FSTs.  This special structure is that
+/// them into a std::vector of separate FSTs.  This special structure is that
 /// the only state that has more than one (arcs-out or final-prob) is the
 /// start state.  fsts_out is resized to the appropriate size.
 template<class Arc>
 void ConvertNbestToVector(const Fst<Arc> &fst,
-                          vector<VectorFst<Arc> > *fsts_out);
-  
+                          std::vector<VectorFst<Arc> > *fsts_out);
+
 
 /// Takes the n-shortest-paths (using ShortestPath), but outputs
 /// the result as a vector of up to n fsts.  This function will
@@ -176,14 +153,14 @@ void ConvertNbestToVector(const Fst<Arc> &fst,
 template<class Arc>
 void NbestAsFsts(const Fst<Arc> &fst,
                  size_t n,
-                 vector<VectorFst<Arc> > *fsts_out);
+                 std::vector<VectorFst<Arc> > *fsts_out);
 
 
 
 
 /// Creates unweighted linear acceptor from symbol sequence.
 template<class Arc, class I>
-void MakeLinearAcceptor(const vector<I> &labels, MutableFst<Arc> *ofst);
+void MakeLinearAcceptor(const std::vector<I> &labels, MutableFst<Arc> *ofst);
 
 
 
@@ -191,7 +168,7 @@ void MakeLinearAcceptor(const vector<I> &labels, MutableFst<Arc> *ofst);
 /// at each position.  Epsilon is treated like a normal symbol here.
 /// Each position in "labels" must have at least one alternative.
 template<class Arc, class I>
-void MakeLinearAcceptorWithAlternatives(const vector<vector<I> > &labels,
+void MakeLinearAcceptorWithAlternatives(const std::vector<std::vector<I> > &labels,
                                         MutableFst<Arc> *ofst);
 
 
@@ -221,14 +198,14 @@ void SafeDeterminizeMinimizeWrapperInLog(VectorFst<StdArc> *ifst, VectorFst<StdA
 /// RemoveSomeInputSymbols removes any symbol that appears in "to_remove", from
 /// the input side of the FST, replacing them with epsilon.
 template<class Arc, class I>
-void RemoveSomeInputSymbols(const vector<I> &to_remove,
+void RemoveSomeInputSymbols(const std::vector<I> &to_remove,
                             MutableFst<Arc> *fst);
 
 // MapInputSymbols will replace any input symbol i that is between 0 and
 // symbol_map.size()-1, with symbol_map[i].  It removes the input symbol
 // table of the FST.
 template<class Arc, class I>
-void MapInputSymbols(const vector<I> &symbol_map,
+void MapInputSymbols(const std::vector<I> &symbol_map,
                      MutableFst<Arc> *fst);
 
 
@@ -327,7 +304,7 @@ void MakeFollowingInputSymbolsSameClass(bool end_is_epsilon, MutableFst<Arc> *fs
 /// less well optimized and would have a lot of final-states.
 
 template<class Arc>
-VectorFst<Arc>* MakeLoopFst(const vector<const ExpandedFst<Arc> *> &fsts);
+VectorFst<Arc>* MakeLoopFst(const std::vector<const ExpandedFst<Arc> *> &fsts);
 
 
 /// ApplyProbabilityScale is applicable to FSTs in the log or tropical semiring.
@@ -382,15 +359,6 @@ void PhiCompose(const Fst<Arc> &fst1,
                 typename Arc::Label phi_label,
                 MutableFst<Arc> *fst);
 
-// Compose a left hand FST or lattice with a right hand
-// DeterministicOnDemandFst and store the result in fst_composed.
-// This is mainly used for expanding lattice n-gram histories, where
-// fst1 is a lattice and fst2 is an UnweightedNgramFst.
-template<class Arc>
-void ComposeDeterministicOnDemand(const Fst<Arc> &fst1,
-                                  DeterministicOnDemandFst<Arc> *fst2,
-                                  MutableFst<Arc> *fst_composed);
-
 // PropagateFinal propagates final-probs through
 // "phi" transitions (note that here, phi_label may
 // be epsilon if you want).  If you have a backoff LM
@@ -424,8 +392,6 @@ void RhoCompose(const Fst<Arc> &fst1,
                 typename Arc::Label rho_label,
                 MutableFst<Arc> *fst);
 
-
-
 /** This function returns true if, in the semiring of the FST, the sum (within
     the semiring) of all the arcs out of each state in the FST is one, to within
     delta.  After MakeStochasticFst, this should be true (for a connected FST).
@@ -447,7 +413,7 @@ bool IsStochasticFst(const Fst<Arc> &fst,
 
 
 // IsStochasticFstInLog makes sure it's stochastic after casting to log.
-inline bool IsStochasticFstInLog(const VectorFst<StdArc> &fst,
+inline bool IsStochasticFstInLog(const Fst<StdArc> &fst,
                                  float delta = kDelta,  // kDelta = 1.0/1024.0 by default.
                                  StdArc::Weight *min_sum = NULL,
                                  StdArc::Weight *max_sum = NULL);

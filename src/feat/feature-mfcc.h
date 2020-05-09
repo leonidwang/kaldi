@@ -1,6 +1,7 @@
 // feat/feature-mfcc.h
 
 // Copyright 2009-2011  Karel Vesely;  Petr Motlicek;  Saarland University
+//           2014-2016  Johns Hopkins University (author: Daniel Povey)
 
 // See ../../COPYING for clarification regarding multiple authors
 //
@@ -23,23 +24,24 @@
 #include <map>
 #include <string>
 
+#include "feat/feature-common.h"
 #include "feat/feature-functions.h"
+#include "feat/feature-window.h"
+#include "feat/mel-computations.h"
 
 namespace kaldi {
 /// @addtogroup  feat FeatureExtraction
 /// @{
 
 
-/// MfccOptions contains basic options for computing MFCC features
-/// It only includes things that can be done in a "stateless" way, i.e.
-/// it does not include energy max-normalization.
-/// It does not include delta computation.
+/// MfccOptions contains basic options for computing MFCC features.
 struct MfccOptions {
   FrameExtractionOptions frame_opts;
   MelBanksOptions mel_opts;
   int32 num_ceps;  // e.g. 13: num cepstral coeffs, counting zero.
   bool use_energy;  // use energy; else C0
-  BaseFloat energy_floor;
+  BaseFloat energy_floor;  // 0 by default; set to a value like 1.0 or 0.1 if
+                           // you disable dithering.
   bool raw_energy;  // If true, compute energy before preemphasis and windowing
   BaseFloat cepstral_lifter;  // Scaling factor on cepstra for HTK compatibility.
                               // if 0.0, no liftering is done.
@@ -52,7 +54,7 @@ struct MfccOptions {
                   // but for 8khz-sampled data, 15 may be better.
                   num_ceps(13),
                   use_energy(true),
-                  energy_floor(0.0),  // not in log scale: a small value e.g. 1.0e-10
+                  energy_floor(0.0),
                   raw_energy(true),
                   cepstral_lifter(22.0),
                   htk_compat(false) {}
@@ -65,7 +67,9 @@ struct MfccOptions {
     opts->Register("use-energy", &use_energy,
                    "Use energy (not C0) in MFCC computation");
     opts->Register("energy-floor", &energy_floor,
-                   "Floor on energy (absolute, not relative) in MFCC computation");
+                   "Floor on energy (absolute, not relative) in MFCC computation. "
+                   "Only makes a difference if --use-energy=true; only necessary if "
+                   "--dither=0.0.  Suggested values: 0.1 or 1.0");
     opts->Register("raw-energy", &raw_energy,
                    "If true, compute energy before preemphasis and windowing");
     opts->Register("cepstral-lifter", &cepstral_lifter,
@@ -77,55 +81,70 @@ struct MfccOptions {
   }
 };
 
-class MelBanks;
 
 
-/// Class for computing MFCC features; see \ref feat_mfcc for more information.
-class Mfcc {
+// This is the new-style interface to the MFCC computation.
+class MfccComputer {
  public:
-  explicit Mfcc(const MfccOptions &opts);
-  ~Mfcc();
+  typedef MfccOptions Options;
+  explicit MfccComputer(const MfccOptions &opts);
+  MfccComputer(const MfccComputer &other);
+
+  const FrameExtractionOptions &GetFrameOptions() const {
+    return opts_.frame_opts;
+  }
 
   int32 Dim() const { return opts_.num_ceps; }
 
-  /// Will throw exception on failure (e.g. if file too short for even one
-  /// frame).  The output "wave_remainder" is the last frame or two of the
-  /// waveform that it would be necessary to include in the next call to Compute
-  /// for the same utterance.  It is not exactly the un-processed part (it may
-  /// have been partly processed), it's the start of the next window that we
-  /// have not already processed.
-  void Compute(const VectorBase<BaseFloat> &wave,
-               BaseFloat vtln_warp,
-               Matrix<BaseFloat> *output,
-               Vector<BaseFloat> *wave_remainder = NULL);
+  bool NeedRawLogEnergy() const { return opts_.use_energy && opts_.raw_energy; }
 
-  /// Const version of Compute()
-  void Compute(const VectorBase<BaseFloat> &wave,
+  /**
+     Function that computes one frame of features from
+     one frame of signal.
+
+     @param [in] signal_raw_log_energy The log-energy of the frame of the signal
+         prior to windowing and pre-emphasis, or
+         log(numeric_limits<float>::min()), whichever is greater.  Must be
+         ignored by this function if this class returns false from
+         this->NeedsRawLogEnergy().
+     @param [in] vtln_warp  The VTLN warping factor that the user wants
+         to be applied when computing features for this utterance.  Will
+         normally be 1.0, meaning no warping is to be done.  The value will
+         be ignored for feature types that don't support VLTN, such as
+         spectrogram features.
+     @param [in] signal_frame  One frame of the signal,
+       as extracted using the function ExtractWindow() using the options
+       returned by this->GetFrameOptions().  The function will use the
+       vector as a workspace, which is why it's a non-const pointer.
+     @param [out] feature  Pointer to a vector of size this->Dim(), to which
+         the computed feature will be written.
+  */
+  void Compute(BaseFloat signal_raw_log_energy,
                BaseFloat vtln_warp,
-               Matrix<BaseFloat> *output,
-               Vector<BaseFloat> *wave_remainder = NULL) const;
-  
-  typedef MfccOptions Options;
+               VectorBase<BaseFloat> *signal_frame,
+               VectorBase<BaseFloat> *feature);
+
+  ~MfccComputer();
  private:
-  void ComputeInternal(const VectorBase<BaseFloat> &wave,
-                       const MelBanks &mel_banks,
-                       Matrix<BaseFloat> *output,
-                       Vector<BaseFloat> *wave_remainder = NULL) const;
-  
+  // disallow assignment.
+  MfccComputer &operator = (const MfccComputer &in);
+
+ protected:
   const MelBanks *GetMelBanks(BaseFloat vtln_warp);
 
-  const MelBanks *GetMelBanks(BaseFloat vtln_warp,
-                              bool *must_delete) const;
-  
   MfccOptions opts_;
   Vector<BaseFloat> lifter_coeffs_;
   Matrix<BaseFloat> dct_matrix_;  // matrix we left-multiply by to perform DCT.
   BaseFloat log_energy_floor_;
   std::map<BaseFloat, MelBanks*> mel_banks_;  // BaseFloat is VTLN coefficient.
-  FeatureWindowFunction feature_window_function_;
   SplitRadixRealFft<BaseFloat> *srfft_;
-  KALDI_DISALLOW_COPY_AND_ASSIGN(Mfcc);
+
+  // note: mel_energies_ is specific to the frame we're processing, it's
+  // just a temporary workspace.
+  Vector<BaseFloat> mel_energies_;
 };
+
+typedef OfflineFeatureTpl<MfccComputer> Mfcc;
 
 
 /// @} End of "addtogroup feat"

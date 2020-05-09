@@ -100,7 +100,7 @@ void ConvertLattice(const ExpandedFst<ArcTpl<LatticeWeightTpl<double> > > &ifst,
   ConvertLattice(fst, ofst);
 }
 
-// CompactLattice with double to Lattice with float.
+/// Converts CompactLattice with double to Lattice with float.
 template<class Int>
 void ConvertLattice(const ExpandedFst<ArcTpl<CompactLatticeWeightTpl<LatticeWeightTpl<double>, Int> > > &ifst,
                     MutableFst<ArcTpl<LatticeWeightTpl<float> > > *ofst) {
@@ -109,7 +109,7 @@ void ConvertLattice(const ExpandedFst<ArcTpl<CompactLatticeWeightTpl<LatticeWeig
   ConvertLattice(fst, ofst);
 }
 
-// CompactLattice with float to Lattice with double.
+/// Converts CompactLattice with float to Lattice with double.
 template<class Int>
 void ConvertLattice(const ExpandedFst<ArcTpl<CompactLatticeWeightTpl<LatticeWeightTpl<float>, Int> > > &ifst,
                     MutableFst<ArcTpl<LatticeWeightTpl<double> > > *ofst) {
@@ -118,18 +118,25 @@ void ConvertLattice(const ExpandedFst<ArcTpl<CompactLatticeWeightTpl<LatticeWeig
   ConvertLattice(fst, ofst);
 }
 
+/// Converts TropicalWeight to LatticeWeight (puts all the weight on
+/// the first float in the lattice's pair).
+template <class Real>
+void ConvertFstToLattice(
+    const ExpandedFst<ArcTpl<TropicalWeight> > &ifst,
+    MutableFst<ArcTpl<LatticeWeightTpl<Real> > > *ofst);
+
 
 /** Returns a default 2x2 matrix scaling factor for LatticeWeight */
-inline vector<vector<double> > DefaultLatticeScale() {
-  vector<vector<double> > ans(2);
+inline std::vector<std::vector<double> > DefaultLatticeScale() {
+  std::vector<std::vector<double> > ans(2);
   ans[0].resize(2, 0.0);
   ans[1].resize(2, 0.0);
   ans[0][0] = ans[1][1] = 1.0;
   return ans;
 }
 
-inline vector<vector<double> > AcousticLatticeScale(double acwt) {
-  vector<vector<double> > ans(2);
+inline std::vector<std::vector<double> > AcousticLatticeScale(double acwt) {
+  std::vector<std::vector<double> > ans(2);
   ans[0].resize(2, 0.0);
   ans[1].resize(2, 0.0);
   ans[0][0] = 1.0;
@@ -137,8 +144,8 @@ inline vector<vector<double> > AcousticLatticeScale(double acwt) {
   return ans;
 }
 
-inline vector<vector<double> > GraphLatticeScale(double lmwt) {
-  vector<vector<double> > ans(2);
+inline std::vector<std::vector<double> > GraphLatticeScale(double lmwt) {
+  std::vector<std::vector<double> > ans(2);
   ans[0].resize(2, 0.0);
   ans[1].resize(2, 0.0);
   ans[0][0] = lmwt;
@@ -146,8 +153,8 @@ inline vector<vector<double> > GraphLatticeScale(double lmwt) {
   return ans;
 }
 
-inline vector<vector<double> > LatticeScale(double lmwt, double acwt) {
-  vector<vector<double> > ans(2);
+inline std::vector<std::vector<double> > LatticeScale(double lmwt, double acwt) {
+  std::vector<std::vector<double> > ans(2);
   ans[0].resize(2, 0.0);
   ans[1].resize(2, 0.0);
   ans[0][0] = lmwt;
@@ -165,7 +172,7 @@ inline vector<vector<double> > LatticeScale(double lmwt, double acwt) {
  */
 template<class Weight, class ScaleFloat>
 void ScaleLattice(
-    const vector<vector<ScaleFloat> > &scale,
+    const std::vector<std::vector<ScaleFloat> > &scale,
     MutableFst<ArcTpl<Weight> > *fst);
 
 /// Removes state-level alignments (the strings that are
@@ -185,10 +192,9 @@ bool CompactLatticeHasAlignment(
 /// to a LatticeArc by putting the StdArc weight as the first
 /// element of the LatticeWeight.  Useful when doing LM
 /// rescoring.
-
-template<class Int>
+template<class Real>
 class StdToLatticeMapper {
-  typedef LatticeWeightTpl<Int> LatticeWeight;
+  typedef LatticeWeightTpl<Real> LatticeWeight;
   typedef ArcTpl<LatticeWeight> LatticeArc;
  public:
   LatticeArc operator()(const StdArc &arc) {
@@ -216,9 +222,9 @@ class StdToLatticeMapper {
 /// Class LatticeToStdMapper maps a LatticeArc to a normal arc (StdArc)
 /// by adding the elements of the LatticeArc weight.
 
-template<class Int>
+template<class Real>
 class LatticeToStdMapper {
-  typedef LatticeWeightTpl<Int> LatticeWeight;
+  typedef LatticeWeightTpl<Real> LatticeWeight;
   typedef ArcTpl<LatticeWeight> LatticeArc;
  public:
   StdArc operator()(const LatticeArc &arc) {

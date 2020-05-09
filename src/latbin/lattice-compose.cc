@@ -22,6 +22,7 @@
 #include "util/common-utils.h"
 #include "fstext/fstext-lib.h"
 #include "lat/kaldi-lattice.h"
+#include "lat/lattice-functions.h"
 
 int main(int argc, char *argv[]) {
   try {
@@ -43,11 +44,13 @@ int main(int argc, char *argv[]) {
         "(lattice-rspecifier2|fst-rxfilename2) lattice-wspecifier\n"
         " e.g.: lattice-compose ark:1.lats ark:2.lats ark:composed.lats\n"
         " or: lattice-compose ark:1.lats G.fst ark:composed.lats\n";
-    
+
     ParseOptions po(usage);
 
+    bool write_compact = true;
     int32 num_states_cache = 50000;
     int32 phi_label = fst::kNoLabel; // == -1
+    po.Register("write-compact", &write_compact, "If true, write in normal (compact) form.");
     po.Register("phi-label", &phi_label, "If >0, the label on backoff arcs of the LM");
     po.Register("num-states-cache", &num_states_cache,
                 "Number of states we cache when mapping LM FST to lattice type. "
@@ -60,17 +63,22 @@ int main(int argc, char *argv[]) {
     }
 
     KALDI_ASSERT(phi_label > 0 || phi_label == fst::kNoLabel); // e.g. 0 not allowed.
-    
+
     std::string lats_rspecifier1 = po.GetArg(1),
         arg2 = po.GetArg(2),
         lats_wspecifier = po.GetArg(3);
     int32 n_done = 0, n_fail = 0;
-    
-    SequentialLatticeReader lattice_reader1(lats_rspecifier1);
-    // Write as compact lattice.
-    CompactLatticeWriter compact_lattice_writer(lats_wspecifier); 
 
+    SequentialLatticeReader lattice_reader1(lats_rspecifier1);
     
+    CompactLatticeWriter compact_lattice_writer;
+    LatticeWriter lattice_writer;
+
+    if (write_compact)
+      compact_lattice_writer.Open(lats_wspecifier);
+    else
+      lattice_writer.Open(lats_wspecifier);
+
     if (ClassifyRspecifier(arg2, NULL, NULL) == kNoRspecifier) {
       std::string fst_rxfilename = arg2;
       VectorFst<StdArc> *fst2 = fst::ReadFstKaldi(fst_rxfilename);
@@ -86,9 +94,10 @@ int main(int argc, char *argv[]) {
         PropagateFinal(phi_label, fst2);
 
       fst::CacheOptions cache_opts(true, num_states_cache);
+      fst::MapFstOptions mapfst_opts(cache_opts);
       fst::StdToLatticeMapper<BaseFloat> mapper;
       fst::MapFst<StdArc, LatticeArc, fst::StdToLatticeMapper<BaseFloat> >
-          mapped_fst2(*fst2, mapper, cache_opts);
+          mapped_fst2(*fst2, mapper, mapfst_opts);
       for (; !lattice_reader1.Done(); lattice_reader1.Next()) {
         std::string key = lattice_reader1.Key();
         KALDI_VLOG(1) << "Processing lattice for key " << key;
@@ -101,9 +110,13 @@ int main(int argc, char *argv[]) {
           KALDI_WARN << "Empty lattice for utterance " << key << " (incompatible LM?)";
           n_fail++;
         } else {
-          CompactLattice clat;
-          ConvertLattice(composed_lat, &clat);
-          compact_lattice_writer.Write(key, clat);
+          if (write_compact) {
+            CompactLattice clat;
+            ConvertLattice(composed_lat, &clat);
+            compact_lattice_writer.Write(key, clat);
+          } else {
+            lattice_writer.Write(key, composed_lat);
+          }
           n_done++;
         }
       }
@@ -114,10 +127,10 @@ int main(int argc, char *argv[]) {
       // read in another set of lattices and compose them.  But in this
       // case we don't do any projection; we assume that the user has already
       // done this (e.g. with lattice-project).
-      RandomAccessLatticeReader lattice_reader2(lats_rspecifier2);    
+      RandomAccessLatticeReader lattice_reader2(lats_rspecifier2);
       for (; !lattice_reader1.Done(); lattice_reader1.Next()) {
         std::string key = lattice_reader1.Key();
-        KALDI_VLOG(1) << "Processing lattice for key " << key;        
+        KALDI_VLOG(1) << "Processing lattice for key " << key;
         Lattice lat1 = lattice_reader1.Value();
         lattice_reader1.FreeCurrent();
         if (!lattice_reader2.HasKey(key)) {
@@ -148,14 +161,18 @@ int main(int argc, char *argv[]) {
           KALDI_WARN << "Empty lattice for utterance " << key << " (incompatible LM?)";
           n_fail++;
         } else {
-          CompactLattice clat_out;
-          ConvertLattice(lat_out, &clat_out);
-          compact_lattice_writer.Write(key, clat_out);
+          if (write_compact) {
+            CompactLattice clat_out;
+            ConvertLattice(lat_out, &clat_out);
+            compact_lattice_writer.Write(key, clat_out);
+          } else {
+            lattice_writer.Write(key, lat_out);
+          }
           n_done++;
         }
       }
     }
-    
+
     KALDI_LOG << "Done " << n_done << " lattices; failed for "
               << n_fail;
     return (n_done != 0 ? 0 : 1);

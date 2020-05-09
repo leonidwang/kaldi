@@ -51,10 +51,10 @@ class DecodableAmDiagGmmRegtreeFmllr: public DecodableAmDiagGmmUnmapped {
   // Note, frames are numbered from zero but transition-ids (tid) from one.
   virtual BaseFloat LogLikelihood(int32 frame, int32 tid) {
     return scale_*LogLikelihoodZeroBased(frame,
-                                         trans_model_.TransitionIdToPdf(tid));
+                                         trans_model_.TransitionIdToPdfFast(tid));
   }
 
-  virtual int32 NumFramesReady() { return feature_matrix_.NumRows(); }
+  virtual int32 NumFramesReady() const { return feature_matrix_.NumRows(); }
 
   // Indices are one-based!  This is for compatibility with OpenFst.
   virtual int32 NumIndices() const { return trans_model_.NumTransitionIds(); }
@@ -94,16 +94,16 @@ class DecodableAmDiagGmmRegtreeMllr: public DecodableAmDiagGmmUnmapped {
   // Note, frames are numbered from zero but transition-ids (tid) from one.
   virtual BaseFloat LogLikelihood(int32 frame, int32 tid) {
     return scale_*LogLikelihoodZeroBased(frame,
-                                         trans_model_.TransitionIdToPdf(tid));
+                                         trans_model_.TransitionIdToPdfFast(tid));
   }
 
-  virtual int32 NumFramesReady() { return feature_matrix_.NumRows(); }
+  virtual int32 NumFramesReady() const { return feature_matrix_.NumRows(); }
 
   // Indices are one-based!  This is for compatibility with OpenFst.
   virtual int32 NumIndices() const { return trans_model_.NumTransitionIds(); }
 
   const TransitionModel *TransModel() { return &trans_model_; }
-  
+
  protected:
   virtual BaseFloat LogLikelihoodZeroBased(int32 frame, int32 state_index);
 

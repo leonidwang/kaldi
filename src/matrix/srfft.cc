@@ -45,6 +45,32 @@ SplitRadixComplexFft<Real>::SplitRadixComplexFft(MatrixIndexT N) {
   ComputeTables();
 }
 
+template <typename Real>
+SplitRadixComplexFft<Real>::SplitRadixComplexFft(
+    const SplitRadixComplexFft<Real> &other):
+    N_(other.N_), logn_(other.logn_) {
+  // This code duplicates tables from a previously computed object.
+  // Compare with the code in ComputeTables().
+  MatrixIndexT lg2 = logn_ >> 1;
+  if (logn_ & 1) lg2++;
+  MatrixIndexT brseed_size = 1 << lg2;
+  brseed_ = new MatrixIndexT[brseed_size];
+  std::memcpy(brseed_, other.brseed_, sizeof(MatrixIndexT) * brseed_size);
+
+  if (logn_ < 4) {
+    tab_ = NULL;
+  } else {
+    tab_ = new Real*[logn_ - 3];
+    for (MatrixIndexT i = logn_; i >= 4 ; i--) {
+      MatrixIndexT m = 1 << i, m2 = m / 2, m4 = m2 / 2;
+      MatrixIndexT this_array_size = 6 * (m4 - 2);
+      tab_[i-4] = new Real[this_array_size];
+      std::memcpy(tab_[i-4], other.tab_[i-4],
+                  sizeof(Real) * this_array_size);
+    }
+  }
+}
+
 template<typename Real>
 void SplitRadixComplexFft<Real>::ComputeTables() {
   MatrixIndexT    imax, lg2, i, j;
@@ -186,7 +212,8 @@ void SplitRadixComplexFft<Real>::ComputeRecursive(Real *xr, Real *xi, MatrixInde
 
   MatrixIndexT    m, m2, m4, m8, nel, n;
   Real    *xr1, *xr2, *xi1, *xi2;
-  Real    *cn, *spcn, *smcn, *c3n, *spc3n, *smc3n;
+  Real    *cn = nullptr, *spcn = nullptr, *smcn = nullptr, *c3n = nullptr,
+    *spc3n = nullptr, *smc3n = nullptr;
   Real    tmp1, tmp2;
   Real   sqhalf = M_SQRT1_2;
 

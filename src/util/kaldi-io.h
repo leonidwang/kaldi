@@ -1,6 +1,7 @@
 // util/kaldi-io.h
 
 // Copyright 2009-2011  Microsoft Corporation;  Jan Silovsky
+//                2016  Xiaohui Zhang
 
 // See ../../COPYING for clarification regarding multiple authors
 //
@@ -19,15 +20,15 @@
 #ifndef KALDI_UTIL_KALDI_IO_H_
 #define KALDI_UTIL_KALDI_IO_H_
 
-#include <cctype>  // For isspace.
-#include <limits>
-#include <string>
-#include "base/kaldi-common.h"
 #ifdef _MSC_VER
 # include <fcntl.h>
 # include <io.h>
 #endif
-
+#include <cctype>  // For isspace.
+#include <limits>
+#include <string>
+#include "base/kaldi-common.h"
+#include "matrix/kaldi-matrix.h"
 
 
 namespace kaldi {
@@ -53,17 +54,18 @@ class InputImplBase;  // Forward decl; defined in a .cc file
 
 // We now document the types of extended filenames that we use.
 //
-// A "wxfilename"  is an extended filename for writing.  It can take three forms:
-// (1) Filename: e.g.    "/some/filename", "./a/b/c", "c:\Users\dpovey\My Documents\\boo"
+// A "wxfilename"  is an extended filename for writing. It can take three forms:
+// (1) Filename: e.g.    "/some/filename", "./a/b/c", "c:\Users\dpovey\My
+//                        Documents\\boo"
 //          (whatever the actual file-system interprets)
 // (2) Standard output:  "" or "-"
-// (3) A pipe: e.g.  "gunzip -c /tmp/abc.gz |"
+// (3) A pipe: e.g. "| gzip -c > /tmp/abc.gz"
 //
 //
 // A "rxfilename" is an extended filename for reading.  It can take four forms:
 // (1) An actual filename, whatever the file-system can read, e.g. "/my/file".
 // (2) Standard input: "" or "-"
-// (3) A pipe: e.g. "| gzip -c > /tmp/abc.gz"
+// (3) A pipe: e.g.  "gunzip -c /tmp/abc.gz |"
 // (4) An offset into a file, e.g.: "/mnt/blah/data/1.ark:24871"
 //   [these are created by the Table and TableWriter classes; I may also write
 //    a program that creates them for arbitrary files]
@@ -93,10 +95,11 @@ enum OutputType {
 
 /// ClassifyWxfilename interprets filenames as follows:
 ///  - kNoOutput: invalid filenames (leading or trailing space, things that look
-///     like wspecifiers and rspecifiers or like pipes to read from with leading |.
+///     like wspecifiers and rspecifiers or like pipes to read from with leading
+///     |.
 ///  - kFileOutput: Normal filenames
 ///  - kStandardOutput: The empty string or "-", interpreted as standard output
-///  - kPipeOutput: pipes, e.g. "gunzip -c some_file.gz |"  
+///  - kPipeOutput: pipes, e.g. "| gzip -c > /tmp/abc.gz"
 OutputType ClassifyWxfilename(const std::string &wxfilename);
 
 enum InputType {
@@ -113,7 +116,7 @@ enum InputType {
 ///       with trailing |.
 ///  - kFileInput: normal filenames
 ///  - kStandardInput: the empty string or "-"
-///  - kPipeInput: e.g. "| gzip -c > blah.gz"
+///  - kPipeInput: e.g. "gunzip -c /tmp/abc.gz |"
 ///  - kOffsetFileInput: offsets into files, e.g.  /some/filename:12970
 InputType ClassifyRxfilename(const std::string &rxfilename);
 
@@ -125,7 +128,7 @@ class Output {
   // with these arguments.
   Output(const std::string &filename, bool binary, bool write_header = true);
 
-  Output(): impl_(NULL) {};
+  Output(): impl_(NULL) {}
 
   /// This opens the stream, with the given mode (binary or text).  It returns
   /// true on success and false on failure.  However, it will throw if something
@@ -136,8 +139,8 @@ class Output {
   /// closing the old stream failed it will throw).
   bool Open(const std::string &wxfilename, bool binary, bool write_header);
 
-  inline bool IsOpen();  // return true if we have an open stream.  Does not imply
-  // stream is good for writing.
+  inline bool IsOpen();  // return true if we have an open stream.  Does not
+  // imply stream is good for writing.
 
   std::ostream &Stream();  // will throw if not open; else returns stream.
 
@@ -162,7 +165,7 @@ class Output {
 
 // bool binary_in;
 // Input ki(some_filename, &binary_in);
-// MyObject.Read(ki, binary_in);
+// MyObject.Read(ki.Stream(), binary_in);
 //
 // ... more extensive example:
 //
@@ -179,7 +182,7 @@ class Output {
 // Input interprets four kinds of filenames:
 //  (1) Normal filenames
 //  (2) The empty string or "-", interpreted as standard output
-//  (3) Pipes, e.g. "| gzip -c > some_file.gz"
+//  (3) A pipe: e.g.  "gunzip -c /tmp/abc.gz |"
 //  (4) Offsets into [real] files, e.g. "/my/filename:12049"
 // The last one has no correspondence in Output.
 
@@ -216,8 +219,9 @@ class Input {
 
   // It is never necessary or helpful to call Close, except if
   // you are concerned about to many filehandles being open.
-  // Close does not throw.
-  void Close();
+  // Close does not throw. It returns the exit code as int32
+  // in the case of a pipe [kPipeInput], and always zero otherwise.
+  int32 Close();
 
   // Returns the underlying stream. Throws if !IsOpen()
   std::istream &Stream();
@@ -226,17 +230,29 @@ class Input {
   // don't worry about the status when we close them.
   ~Input();
  private:
-  bool OpenInternal(const std::string &rxfilename, bool file_binary, bool *contents_binary);
+  bool OpenInternal(const std::string &rxfilename, bool file_binary,
+                    bool *contents_binary);
   InputImplBase *impl_;
   KALDI_DISALLOW_COPY_AND_ASSIGN(Input);
 };
 
-template <class C> inline void ReadKaldiObject(const std::string &filename,
-                                               C *c) {
+template <class C> void ReadKaldiObject(const std::string &filename,
+                                        C *c) {
   bool binary_in;
   Input ki(filename, &binary_in);
   c->Read(ki.Stream(), binary_in);
 }
+
+// Specialize the template for reading matrices, because we want to be able to
+// support reading 'ranges' (row and column ranges), like foo.mat[10:20].
+template <> void ReadKaldiObject(const std::string &filename,
+                                 Matrix<float> *m);
+
+
+template <> void ReadKaldiObject(const std::string &filename,
+                                 Matrix<double> *m);
+
+
 
 template <class C> inline void WriteKaldiObject(const C &c,
                                                 const std::string &filename,
@@ -248,17 +264,17 @@ template <class C> inline void WriteKaldiObject(const C &c,
 /// PrintableRxfilename turns the rxfilename into a more human-readable
 /// form for error reporting, i.e. it does quoting and escaping and
 /// replaces "" or "-" with "standard input".
-std::string PrintableRxfilename(std::string rxfilename);
+std::string PrintableRxfilename(const std::string &rxfilename);
 
-/// PrintableWxfilename turns the filename into a more human-readable
+/// PrintableWxfilename turns the wxfilename into a more human-readable
 /// form for error reporting, i.e. it does quoting and escaping and
 /// replaces "" or "-" with "standard output".
-std::string PrintableWxfilename(std::string wxfilename);
+std::string PrintableWxfilename(const std::string &wxfilename);
 
 /// @}
 
 }  // end namespace kaldi.
 
-#include "kaldi-io-inl.h"
+#include "util/kaldi-io-inl.h"
 
-#endif
+#endif  // KALDI_UTIL_KALDI_IO_H_

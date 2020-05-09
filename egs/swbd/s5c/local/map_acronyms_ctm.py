@@ -1,4 +1,8 @@
 #!/usr/bin/env python
+
+# Copyright 2015  Minhua Wu
+# Apache 2.0
+
 # convert acronyms in swbd decode result
 # e.g. convert things like en_4156 B 414.26 0.65 u._c._l._a. to
 # en_4156 B 414.26 0.16 u
@@ -6,6 +10,7 @@
 # en_4156 B 414.58 0.16 l
 # en_4156 B 414.74 0.17 a
 
+from __future__ import division
 import argparse,re
 __author__ = 'Minhua Wu'
  
@@ -14,6 +19,9 @@ parser.add_argument('-i','--input', help='Input ctm file ',required=True)
 parser.add_argument('-o','--output',help='Output ctm file', required=True)
 parser.add_argument('-M','--Map',help='Input acronyms map', required=True)
 args = parser.parse_args()
+
+if args.input == '-': args.input = '/dev/stdin'
+if args.output == '-': args.output = '/dev/stdout'
 
 dict_acronym_back = {}
 fin_map = open(args.Map, "r")

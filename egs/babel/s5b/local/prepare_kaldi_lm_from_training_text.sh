@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # This script was copied from ../10hSystem/local (Author: Guoguo Chen?)
 # It will be modified to make it somewhat more reusable
@@ -8,7 +8,7 @@
 # This script trains LMs on the WSJ LM-training data.
 # It requires that you have already run wsj_extend_dict.sh,
 # to get the larger-size dictionary including all of CMUdict
-# plus any OOVs and possible acronyms that we could easily 
+# plus any OOVs and possible acronyms that we could easily
 # derive pronunciations for.
 
 # This script takes as command-line arguments the relevant data/lang
@@ -69,7 +69,7 @@ cat $data/text | awk '{for (n=2;n<NF;n++) printf("%s ", $n); printf "\n";}' | \
  gzip -c > $dir/train_in.gz || exit 1;
 
 # Get training data with OOV words (w.r.t. our current vocab) replaced with <unk>.
-echo "Getting training data with OOV words replaced with <unk> (train_nounk.gz)" 
+echo "Getting training data with OOV words replaced with <unk> (train_nounk.gz)"
 gunzip -c $dir/train_in.gz | awk -v w=$dir/wordlist \
   'BEGIN{while((getline<w)>0) v[$1]=1;}
   {for (i=1;i<=NF;i++) if ($i in v) printf $i" ";else printf "<unk> ";print ""}'|sed 's/ $//g' \
@@ -93,7 +93,7 @@ gunzip -c $dir/train_nounk.gz | awk -v wmap=$dir/word_map 'BEGIN{while((getline<
 
 # To save disk space, remove the un-mapped training data.  We could
 # easily generate it again if needed.
-rm $dir/train_nounk.gz 
+rm $dir/train_nounk.gz
 
 
 ##################################################################
@@ -177,7 +177,7 @@ prune_lm.sh --arpa 5.0 $dir/4gram
 # The default LM chosen to be the last pruned 4gram-mincount
 #
 # Note: One can cheat and provide an external ARPA LM here!!!
-#       To do so, make sure that 
+#       To do so, make sure that
 #         -- its vocabulary is fully covered by $lang/words.txt,
 #         -- it is gzipped and
 #         -- it is placed in the $dir directory.
@@ -189,30 +189,25 @@ phone_disambig_symbol=`grep \#0 $lang/phones.txt | awk '{print $2}'`
 word_disambig_symbol=`grep \#0 $lang/words.txt | awk '{print $2}'`
 
 if [ -r $dir/$LMtoCompileIntoFST ]; then
-    gzipped_ARPA_LM="$dir/$LMtoCompileIntoFST"
+  gzipped_ARPA_LM="$dir/$LMtoCompileIntoFST"
 else
-    echo "$0 WARNING: Cannot read ARPA LM $dir/$LMtoCompileIntoFST"
-    echo "        Trying $LMtoCompileIntoFST"
-    if [ -r $LMtoCompileIntoFST ]; then
-	gzipped_ARPA_LM="$LMtoCompileIntoFST"
-    else
-	echo "$0 ERROR: Cannot read ARPA LM"
-	exit 1
-    fi
+  echo "$0 WARNING: Cannot read ARPA LM $dir/$LMtoCompileIntoFST"
+  echo "        Trying $LMtoCompileIntoFST"
+  if [ -r $LMtoCompileIntoFST ]; then
+    gzipped_ARPA_LM="$LMtoCompileIntoFST"
+  else
+    echo "$0 ERROR: Cannot read ARPA LM"
+    exit 1
+  fi
 fi
 
 echo "Compiling $gzipped_ARPA_LM into $lang/G.fst"
 
 . ./path.sh || exit 1;
 gunzip -c $gzipped_ARPA_LM | \
-  grep -v '<s> <s>' | \
-  grep -v '</s> <s>' | \
-  grep -v '</s> </s>' | \
-  arpa2fst - | fstprint | \
-    utils/eps2disambig.pl | utils/s2eps.pl | fstcompile --isymbols=$lang/words.txt \
-      --osymbols=$lang/words.txt  --keep_isymbols=false --keep_osymbols=false | \
-     fstrmepsilon > $lang/G.fst || exit 1;
-  fstisstochastic $lang/G.fst
+  arpa2fst --disambig-symbol=#0 \
+  --read-symbol-table=$lang/words.txt - $lang/G.fst || exit 1;
+fstisstochastic $lang/G.fst
 
 ##################################################################
 # Redo the FST step after reviewing perplexities reported by the
@@ -220,4 +215,3 @@ gunzip -c $gzipped_ARPA_LM | \
 ##################################################################
 
 exit 0
-

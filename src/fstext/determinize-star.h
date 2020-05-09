@@ -2,6 +2,7 @@
 
 // Copyright 2009-2011  Microsoft Corporation
 //                2014  Guoguo Chen
+//                2015  Hainan Xu
 
 // See ../../COPYING for clarification regarding multiple authors
 //
@@ -39,7 +40,7 @@ namespace fst {
 /*
    DeterminizeStar implements determinization with epsilon removal, which we
    distinguish with a star.
-   
+
    We define a determinized* FST as one in which no state has more than one
    transition with the same input-label.  Epsilon input labels are not allowed
    except starting from states that have exactly one arc exiting them (and are
@@ -53,8 +54,8 @@ namespace fst {
    float-weight.  It does epsilon removal and determinization.
    This algorithm may fail if the input has epsilon cycles under
    certain circumstances (i.e. the semiring is non-idempotent, e.g. the log
-   semiring, or there are negative cost epsilon cycles).  
-   
+   semiring, or there are negative cost epsilon cycles).
+
    This implementation is much less fancy than the one in fst/determinize.h, and
    does not have an "on-demand" version.
 
@@ -79,11 +80,13 @@ namespace fst {
     If allow_partial is true, the algorithm will output partial results when the
     specified max_states is reached (when larger than zero), instead of throwing
     out an error.
-    The function will return false if partial FST is generated, and true if the
-    complete determinized FST is generated.
+
+    Caution, the return status is un-intuitive: this function will return false if
+    determinization completed normally, and true if it was stopped early by
+    reaching the 'max-states' limit, and a partial FST was generated.
 */
-template<class Arc>
-bool DeterminizeStar(Fst<Arc> &ifst, MutableFst<Arc> *ofst,
+template<class F>
+bool DeterminizeStar(F &ifst, MutableFst<typename F::Arc> *ofst,
                      float delta = kDelta,
                      bool *debug_ptr = NULL,
                      int max_states = -1,
@@ -99,11 +102,13 @@ bool DeterminizeStar(Fst<Arc> &ifst, MutableFst<Arc> *ofst,
     If allow_partial is true, the algorithm will output partial results when the
     specified max_states is reached (when larger than zero), instead of throwing
     out an error.
-    The function will return false if partial FST is generated, and true if the
-    complete determinized FST is generated.
+
+    Caution, the return status is un-intuitive: this function will return false if
+    determinization completed normally, and true if it was stopped early by
+    reaching the 'max-states' limit, and a partial FST was generated.
 */
-template<class Arc>
-bool DeterminizeStar(Fst<Arc> &ifst, MutableFst<GallicArc<Arc> > *ofst,
+template<class F>
+bool DeterminizeStar(F &ifst, MutableFst<GallicArc<typename F::Arc> > *ofst,
                      float delta = kDelta, bool *debug_ptr = NULL,
                      int max_states = -1,
                      bool allow_partial = false);

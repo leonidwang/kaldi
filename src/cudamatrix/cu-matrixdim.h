@@ -26,16 +26,10 @@
 /*
  * Typedefs needed for ANSI-C interface of CUDA wrappers
  */
-#ifdef _MSC_VER
-  typedef unsigned __int32 uint32_cuda;
-  typedef __int32          int32_cuda;
-  typedef __int32          MatrixIndexT_cuda; // you'd have to change this if you changed MatrixIndexT from int32.
-#else
-  #include <stdint.h>
-  typedef uint32_t         uint32_cuda;
-  typedef int32_t          int32_cuda;
-  typedef int32_t          MatrixIndexT_cuda; // you'd have to change this if you changed MatrixIndexT from int32.
-#endif
+#include <cstdint>
+typedef uint32_t         uint32_cuda;
+typedef int32_t          int32_cuda;
+typedef int32_t          MatrixIndexT_cuda; // you'd have to change this if you changed MatrixIndexT from int32.
 
 template<typename Real>
 struct MatrixElement {
@@ -57,7 +51,7 @@ extern "C" {
 
 // we define the following constants here because this file is included
 // both by the C++ code and also CUDA code.
-  
+
 
 // The size of a CUDA 1-d block, e.g. for vector operations..
 #define CU1DBLOCK 256
@@ -85,6 +79,14 @@ extern "C" {
     int32_cuda first;
     int32_cuda second;
   } Int32Pair;
+
+  inline bool operator<(const Int32Pair &a, const Int32Pair &b) {
+    if (a.first < b.first)
+      return true;
+    if (a.first > b.first)
+      return false;
+    return a.second < b.second;
+  }
 }
 
 #endif

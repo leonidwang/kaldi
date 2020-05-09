@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copyright 2014  Gaurav Kumar.   Apache 2.0
 
-. path.sh
+. ./path.sh
 
 #First get the list of unique words from our text file
 if [ $# -lt 1 ]; then
@@ -22,12 +22,32 @@ lexicon=$1
 #Get all unique words, remove punctuation.
 if [ $stage -le 0 ]; then
   cat $datadir/text | sed 's:[0-9][0-9]\S*::g' | sed 's:[\.,\?]::g' | tr " " "\n" | sort | uniq | awk '{if (NF > 0){ print; }}' > $tmpdir/uniquewords
-  if [ -f "/export/a04/gkumar/corpora/gigaword-spanish/bin/gigaword-lexicon.json" ]; then
-    # Merge with gigaword corpus
-    $local/merge_lexicons.py
-    mv $tmpdir/uniquewords $tmpdir/uniquewords.small
-    mv $tmpdir/uniquewords64k $tmpdir/uniquewords
+  if [ ! -f "${tmpdir}/es_wordlist.json" ]; then
+    echo "Could not find the large collection of Spanish words es_wordlist.json"
+    echo "Trying to download it via wget"
+
+    if ! which wget >&/dev/null; then
+      echo "This script requires you to first install wget"
+      exit 1;
+    fi
+
+    cwd=`pwd`
+    cd $tmpdir
+    wget -T 10 -t 3 -c http://www.openslr.org/resources/21/es_wordlist.json.tgz
+
+    if [ ! -e ${tmpdir}/es_wordlist.json.tgz ]; then
+      echo "Download of the large Spanish word list failed"
+      exit 1;
+    fi
+
+    tar -xovzf es_wordlist.json.tgz || exit 1;
+    cd $cwd
   fi
+
+  # Merge with gigaword corpus
+  $local/merge_lexicons.py ${tmpdir} ${lexicon}
+  mv $tmpdir/uniquewords $tmpdir/uniquewords.small
+  mv $tmpdir/uniquewords64k $tmpdir/uniquewords
 fi
 
 #Then get the list of phones form basic_rules in the lexicon folder
@@ -36,20 +56,21 @@ if [ $stage -le 1 ]; then
     echo "Could not find folder callhome_spanish_lexicon_970908 in the lexicon folder"
     exit 1;
   fi
-  
+
   # This is a preliminary attempt to get the unique phones from the LDC lexicon
   # This will be extended based on our lexicon later
-  perl $local/find_unique_phones.pl $lexicon/callhome_spanish_lexicon_970908 $tmpdir 
-  
+  perl $local/find_unique_phones.pl $lexicon/callhome_spanish_lexicon_970908 $tmpdir
+
 fi
 
 #Get pronunciation for each word using the spron.pl file in the lexicon folder
 if [ $stage -le 2 ]; then
   #cd $lexicon/callhome_spanish_lexicon_970908
-  # Replace all words for which no pronunciation was generated with an orthographic 
+  # Replace all words for which no pronunciation was generated with an orthographic
   # representation
   cat $tmpdir/uniquewords | $local/spron.pl $lexicon/callhome_spanish_lexicon_970908/preferences $lexicon/callhome_spanish_lexicon_970908/basic_rules \
     | cut -f1 | sed -r 's:#\S+\s\S+\s\S+\s\S+\s(\S+):\1:g' \
+    | awk -F '[/][/]' '{print $1}' \
     > $tmpdir/lexicon_raw
 fi
 
@@ -61,12 +82,12 @@ if [ $stage -le 3 ]; then
   mv $tmpdir/phones $tmpdir/phones.small
   mv $tmpdir/phones_extended.1 $tmpdir/phones
   sort $tmpdir/phones -o $tmpdir/phones
-  paste -d ' ' $tmpdir/uniquewords $tmpdir/lexicon_one_column | sed -r 's:(\S+)\s#.*:\1 oov:g' > $tmpdir/lexicon.1  
-  #paste -d ' ' $tmpdir/uniquewords $tmpdir/lexicon_one_column | grep -v '#' > $tmpdir/lexicon.1  
+  paste -d ' ' $tmpdir/uniquewords $tmpdir/lexicon_one_column | sed -r 's:(\S+)\s#.*:\1 oov:g' > $tmpdir/lexicon.1
+  #paste -d ' ' $tmpdir/uniquewords $tmpdir/lexicon_one_column | grep -v '#' > $tmpdir/lexicon.1
 fi
 
 if [ $stage -le 4 ]; then
-  # silence phones, one per line. 
+  # silence phones, one per line.
   for w in sil laughter noise oov; do echo $w; done > $dir/silence_phones.txt
   echo sil > $dir/optional_silence.txt
 
@@ -79,14 +100,13 @@ if [ $stage -le 4 ]; then
   rm $tmpdir/phones
   mv $tmpdir/phones.1 $tmpdir/phones
   cp $tmpdir/phones $dir/nonsilence_phones.txt
-  
+
   if [ -f $tmpdir/lexicon.2 ]; then rm $tmpdir/lexicon.2; fi
   cp "$tmpdir/lexicon.1" "$tmpdir/lexicon.2"
-  
+
   # Add prons for laughter, noise, oov
-  for w in `grep -v sil $dir/silence_phones.txt`; do
-    sed -i "/\[$w\]/d" $tmpdir/lexicon.2
-  done
+  w=$(grep -v sil $dir/silence_phones.txt | tr '\n' '|')
+  perl -i -ne "print unless /\[(${w%?})\]/"  $tmpdir/lexicon.2
 
   for w in `grep -v sil $dir/silence_phones.txt`; do
     echo "[$w] $w"
@@ -107,18 +127,15 @@ if [ $stage -le 4 ]; then
 
   awk '{print $1}' $dir/lexicon.txt | \
   perl -e '($word_counts)=@ARGV;
-   open(W, "<$word_counts")||die "opening word-counts $word_counts";             
+   open(W, "<$word_counts")||die "opening word-counts $word_counts";
    while(<STDIN>) { chop; $seen{$_}=1; }
    while(<W>) {
      ($c,$w) = split;
-     if (!defined $seen{$w}) { print; }                                          
-   } ' $tmpdir/word_counts > $tmpdir/oov_counts.txt                                    
-                                                                                 
-  echo "*Highest-count OOVs are:"                                                  
-  head -n 20 $tmpdir/oov_counts.txt 
+     if (!defined $seen{$w}) { print; }
+   } ' $tmpdir/word_counts > $tmpdir/oov_counts.txt
+  echo "*Highest-count OOVs are:"
+  head -n 20 $tmpdir/oov_counts.txt
+fi
 
-fi 
-
-#TODO: Uncomment
-$utils/validate_dict_dir.pl $dir                                                  
+$utils/validate_dict_dir.pl $dir
 exit 0;

@@ -18,56 +18,57 @@
 // limitations under the License.
 
 #include "nnet3/natural-gradient-online.h"
+#include "nnet3/nnet-parse.h"
 
 namespace kaldi {
 namespace nnet3 {
 
 
-static void CheckOrthogonal(CuMatrixBase<BaseFloat> *N,
-                            bool quiet = false,
-                            int32 recurse_count = 0) {
-  if (recurse_count > 100)
-    KALDI_ERR << "CheckOrthogonal recursed >100 times, something is wrong.";
+OnlineNaturalGradient::OnlineNaturalGradient():
+    rank_(40), update_period_(1), num_samples_history_(2000.0),
+    num_minibatches_history_(0.0), alpha_(4.0),
+    epsilon_(1.0e-10), delta_(5.0e-04), frozen_(false), t_(0),
+    self_debug_(false), rho_t_(-1.0e+10) { }
 
-  int32 R = N->NumRows();
-  CuSpMatrix<BaseFloat> S(R);
-  S.AddMat2(1.0, *N, kNoTrans, 0.0);
-  if (!S.IsUnit(1.0e-04)) {
-    {
-      SpMatrix<BaseFloat> S_cpu(S);
-      if (!quiet)
-        KALDI_WARN << "Matrix N is not orthogonal, fixing it.  N N^T is "
-                   << S_cpu;
-      Vector<BaseFloat> s(R);
-      S_cpu.Eig(&s);
-      BaseFloat threshold = 0.001;
-      if (s.Min() < threshold) {
-        if (!quiet) {
-          KALDI_WARN << "Minimum eigenvalue of N N^T is less than " << threshold
-                     << ", may be hard to fix: re-initializing from random "
-                     << "start. Eigs are" << s;
-        }
-        N->SetRandn();
-        CheckOrthogonal(N, quiet, recurse_count + 1);
-        return;
-      }
+
+/**
+  This function creates a matrix with orthonormal rows that is like the
+  following matrix, except with each row normalized to have unit 2-norm:
+  [  1.1 0   1   0   1   0
+     0   1.1 0   1   0   1  ]
+  The reason why the first element in each row is 1.1 and not 1, is for
+  symmetry-breaking... we don't want any weighted sum of all these rows to be
+  all ones, because the derivative in that direction can be zero in some
+  architectures and it causes us to have to do an inefficient CPU-based
+  renormalization.
+ */
+// static
+void OnlineNaturalGradient::InitOrthonormalSpecial(CuMatrixBase<BaseFloat> *R) {
+  int32 num_rows = R->NumRows(), num_cols = R->NumCols();
+  KALDI_ASSERT(num_cols >= num_rows);
+  R->SetZero();
+  std::vector<MatrixElement<BaseFloat> > elems;
+  elems.reserve(num_cols);
+  BaseFloat first_elem = 1.1;
+  for (int32 r = 0; r < num_rows; r++) {
+    std::vector<int32> cols;  // columns that have an entry for this row
+    for (int32 c = r; c < num_cols; c += num_rows)
+      cols.push_back(c);
+    BaseFloat normalizer = 1.0 / sqrt(first_elem * first_elem +
+                                      cols.size() - 1);
+    for (size_t i = 0; i < cols.size(); i++) {
+      int32 c = cols[i];
+      MatrixElement<BaseFloat> e = { r, c,
+                                     normalizer * (i == 0 ? first_elem :
+                                                   BaseFloat(1.0)) };
+      elems.push_back(e);
     }
-    CuTpMatrix<BaseFloat> Cinv(R);
-    Cinv.Cholesky(S);
-    Cinv.Invert();
-    CuMatrix<BaseFloat> N_copy(*N);
-    N->AddTpMat(1.0, Cinv, kNoTrans, N_copy, kNoTrans, 0.0);
-    CheckOrthogonal(N, quiet, recurse_count + 1); // Check that it worked.
   }
+  R->AddElements(1.0, elems);
 }
 
-OnlineNaturalGradient::OnlineNaturalGradient():
-    rank_(40), update_period_(1), num_samples_history_(2000.0), alpha_(4.0),
-    epsilon_(1.0e-10), delta_(5.0e-04), t_(-1),
-    num_updates_skipped_(0), self_debug_(false) { }
 
-void OnlineNaturalGradient::Init(const CuMatrixBase<BaseFloat> &R0) {
-  int32 D = R0.NumCols(), N = R0.NumRows();
+void OnlineNaturalGradient::InitDefault(int32 D) {
   if (rank_ >= D) {
     KALDI_WARN << "Rank " << rank_ << " of online preconditioner is >= dim " << D
                << ", setting it to "
@@ -80,80 +81,124 @@ void OnlineNaturalGradient::Init(const CuMatrixBase<BaseFloat> &R0) {
     // We'll handle this as a special case, for generality.
     return;
   }
-
-  KALDI_ASSERT(num_samples_history_ > 0.0 && num_samples_history_ <= 1.0e+6);
+  KALDI_ASSERT(num_samples_history_ > 0.0 && num_samples_history_ <= 1.0e+06);
+  KALDI_ASSERT((num_minibatches_history_ == 0.0 ||
+                num_minibatches_history_ > 1.0) &&
+               num_minibatches_history_ < 1.0e+06);
   KALDI_ASSERT(alpha_ >= 0.0);
   KALDI_ASSERT(rank_ > 0);
   KALDI_ASSERT(epsilon_ > 0.0 && epsilon_ <= 1.0e-05);  // plausible values.
   KALDI_ASSERT(delta_ > 0.0 && delta_ <= 1.0e-02);  // plausible values.
 
-  int32 R = rank_;
-  W_t_.Resize(R, D);
-  d_t_.Resize(R);
-  CuVector<BaseFloat> L(R);
-  ApproxEigsOfProduct(R0, kTrans, &W_t_, &L);
-  // want L to be eigenvalues of 1/N R0 R0^T
-  L.Scale(1.0 / N);
-
-  // \rho_0 = (1/N tr(R0 R0^T) - tr(L)) / (D - R)
-  rho_t_ = (TraceMatMat(R0, R0, kTrans) / N - L.Sum()) / (D - R);
-  BaseFloat floor_val = std::max(epsilon_, delta_ * L.Max());
-  if (rho_t_ < floor_val)
-    rho_t_ = floor_val;
-  d_t_.CopyFromVec(L);
-  d_t_.Add(-rho_t_);  // D_0 = L - \rho_0 I
-  d_t_.ApplyFloor(epsilon_);
-
-  // beta_t = \rho_t(1+\alpha) + \alpha/D tr(D_t)
-  BaseFloat beta_t = rho_t_ * (1.0 + alpha_) + alpha_ * d_t_.Sum() / D;
-  Vector<BaseFloat> e_t(R), sqrt_e_t(R), inv_sqrt_e_t(R);
-  ComputeEt(d_t_, beta_t, &e_t, &sqrt_e_t, &inv_sqrt_e_t);
-  // Compute W_0 by scaling the rows of R_0 with E_0^{0.5}.
-  CuVector<BaseFloat> sqrt_e_t_gpu(sqrt_e_t);
-  W_t_.MulRowsVec(sqrt_e_t_gpu);
+  // to initialize, in the equation
+  //   F_t =(def) R_t^T D_t R_t + \rho_t I
+  // we will set the orthogonal R_t to a special orthogonal matrix with no zero
+  // rows or columns (see the function), rho_t to epsilon,
+  // and D_t to epsilon.  But we don't store R_t directly.  Instead, we store
+  //   W_t =(def)  E_t^{0.5} R_t,
+  // where E_t =(def)  1/\beta_t (D_t^{-1} + 1/\beta_t I)^{-1}
+  // from (eqn:tii),
+  //  e_{tii} =   1/(\beta_t/d_{tii} + 1),
+  // where
+  // \beta_t =(def) \rho_t + \alpha/D tr(F_t)
+  //         =      epsilon + alpha/D * (epsilon * D + epsilon * rank)
+  //         =     epsilon * (1 + alpha * (D + rank) / D)
+  // And  d_{tii} is epsilon, so
+  //  e_{tii} =   1/((1 + alpha * (D + rank) / D) + 1)  [for each i.]
+  //          =   1/(2 + alpha * (D + rank) / D)).
+  BaseFloat epsilon = epsilon_;  // we could make this a bit more.
+  rho_t_ = epsilon;
+  d_t_.Resize(rank_, kUndefined);
+  d_t_.Set(epsilon);
+  W_t_.Resize(rank_, D, kUndefined);
+  // after the next line, W_ will store the orthogonal matrix R_t.
+  InitOrthonormalSpecial(&W_t_);
+  BaseFloat E_tii = 1.0 / ( 2.0 + (D + rank_) * alpha_ / D );
+  // W_t =(def) E_t^{0.5} R_t.
+  W_t_.Scale(sqrt(E_tii));
   t_ = 0;
+}
+
+void OnlineNaturalGradient::Init(const CuMatrixBase<BaseFloat> &X0) {
+  int32 D = X0.NumCols();
+  // for locking reasons it's better to use a different object.
+  OnlineNaturalGradient this_copy(*this);
+  this_copy.InitDefault(D);
+  this_copy.t_ = 1;  // Prevent recursion to Init() again.
+
+  CuMatrix<BaseFloat> X0_copy(X0.NumRows(), X0.NumCols(), kUndefined);
+  // 'num_iters' is number of iterations with the same data from a pseudorandom
+  // start.  this is a faster way of starting than doing eigenvalue
+  // decomposition.
+  //
+  // Note: we only do three iterations of initialization if we have enough data
+  // that it's reasonably possible to estimate the subspace of dimension
+  // this_copy.rank_.  If we don't have more than that many rows in our initial
+  // minibatch X0, we just do one iteration... this gives us almost exactly
+  // (barring small effects due to epsilon_ > 0) the row subspace of X0 after
+  // one iteration anyway.
+  int32 num_init_iters;
+  if (X0.NumRows() <= this_copy.rank_)
+    num_init_iters = 1;
+  else
+    num_init_iters = 3;
+
+  this_copy.frozen_ = false;   // un-freeze if it was frozen, so we can
+                               // initialize.
+  for (int32 i = 0; i < num_init_iters; i++) {
+    BaseFloat scale;
+    X0_copy.CopyFromMat(X0);
+    this_copy.PreconditionDirections(&X0_copy, &scale);
+  }
+  rank_ = this_copy.rank_;
+  W_t_.Swap(&this_copy.W_t_);
+  d_t_.Swap(&this_copy.d_t_);
+  rho_t_ = this_copy.rho_t_;
 }
 
 void OnlineNaturalGradient::PreconditionDirections(
     CuMatrixBase<BaseFloat> *X_t,
-    CuVectorBase<BaseFloat> *row_prod,
     BaseFloat *scale) {
+  NVTX_RANGE(__func__);
   if (X_t->NumCols() == 1) {
     // If the dimension of the space equals one then our natural gradient update
     // with rescaling becomes a no-op, but the code wouldn't naturally handle it
     // because rank would be zero.  Support this as a special case.
-    if (row_prod)
-      row_prod->AddDiagMat2(1.0, *X_t, kNoTrans, 0.0);
-    *scale = 1.0;
+    if (scale)
+      *scale = 1.0;
     return;
   }
 
-  if (row_prod == NULL) {
-    CuVector<BaseFloat> row_prod_tmp(X_t->NumRows());
-    PreconditionDirections(X_t, &row_prod_tmp, scale);
-    return;
-  }
-
-  read_write_mutex_.Lock();
-  if (t_ == -1) // not initialized
+  if (t_ == 0) // not initialized
     Init(*X_t);
 
-  // Now t_ >= 0.
-  // We create local copies  of the class variables... this is intended for
-  // multi-threaded safety so we can't read them in an inconsistent state,
-  // but we don't really waste anything here (a copy of W_t is needed anyway,
-  // if we're to update it).
-  int32 t = t_, R = W_t_.NumRows(), D = W_t_.NumCols();
+  int32 R = W_t_.NumRows(), D = W_t_.NumCols();
   // space for W_t, J_t, K_t, L_t.
   CuMatrix<BaseFloat> WJKL_t(2 * R, D + R);
   WJKL_t.Range(0, R, 0, D).CopyFromMat(W_t_);
   BaseFloat rho_t(rho_t_);
   Vector<BaseFloat> d_t(d_t_);
-  read_write_mutex_.Unlock();
-  PreconditionDirectionsInternal(t, rho_t, d_t, &WJKL_t, X_t, row_prod, scale);
+
+  bool updating = Updating();
+
+  BaseFloat initial_product;
+  initial_product = TraceMatMat(*X_t, *X_t, kTrans);
+
+  PreconditionDirectionsInternal(rho_t, initial_product,
+                                 updating, d_t, &WJKL_t, X_t);
+
+  if (scale) {
+    if (initial_product <= 0.0) {
+      *scale = 1.0;
+    } else {
+      BaseFloat final_product = TraceMatMat(*X_t, *X_t, kTrans);
+      *scale = sqrt(initial_product / final_product);
+    }
+  }
+  t_ += 1;
 }
 
-void OnlineNaturalGradient::ReorthogonalizeXt1(
+void OnlineNaturalGradient::ReorthogonalizeRt1(
     const VectorBase<BaseFloat> &d_t1,
     BaseFloat rho_t1,
     CuMatrixBase<BaseFloat> *W_t1,
@@ -170,7 +215,7 @@ void OnlineNaturalGradient::ReorthogonalizeXt1(
   ComputeEt(d_t1, beta_t1, &e_t1, &sqrt_e_t1, &inv_sqrt_e_t1);
 
   temp_O->SymAddMat2(1.0, *W_t1, kNoTrans, 0.0);
-  // O_t =  E_t^{-0.5} W_t W_t^T E_t^{-0.5}
+  // O_{t+1} =  E_{t+1}^{-0.5} W_{t+1} W_{t+1}^T E_{t+1}^{-0.5}
   Matrix<BaseFloat> O_mat(*temp_O);
   SpMatrix<BaseFloat> O(O_mat, kTakeLower);
   for (int32 i = 0; i < R; i++) {
@@ -187,22 +232,33 @@ void OnlineNaturalGradient::ReorthogonalizeXt1(
     return;
   }
   TpMatrix<BaseFloat> C(R);
+  bool cholesky_ok = true;
   try {
+    // one of the following two calls may throw an exception.
     C.Cholesky(O);
+    C.Invert();  // Now it's C^{-1}.
+    if (!(C.Max() < 100.0)) {
+      KALDI_WARN << "Cholesky out of expected range, "
+                << "reorthogonalizing with Gram-Schmidt";
+      cholesky_ok = false;
+    }
   } catch (...) {
-    // It would be very strange to reach this point, but we try to handle it
-    // gracefully anyway.
-    KALDI_WARN << "Cholesky failed while re-orthogonalizing R_t. "
-               << "Re-initializing as arbitrary orthogonal matrix.";
-    // set R_t to [I; 0] which is orthogonal.
-    W_t1->SetZero();
-    W_t1->AddToDiag(1.0);
-    // W_{t+1} = E_{t+1}^{0.5} R_{t+1}
+    // We do a Gram-Schmidt orthogonalization, which is a bit less efficient but
+    // more robust than the method using Cholesky.
+    KALDI_WARN << "Cholesky or Invert() failed while re-orthogonalizing R_t. "
+               << "Re-orthogonalizing on CPU.";
+    cholesky_ok = false;
+  }
+  if (!cholesky_ok) {
+    Matrix<BaseFloat> cpu_W_t1(*W_t1);
+    cpu_W_t1.OrthogonalizeRows();
+    W_t1->CopyFromMat(cpu_W_t1);
+    // at this point cpu_W_t1 represents R_{t+1}- it has orthonormal
+    // rows.  Do: W_{t+1} = E_{t+1}^{0.5} R_{t+1}
     CuVector<BaseFloat> sqrt_e_t1_gpu(sqrt_e_t1);
     W_t1->MulRowsVec(sqrt_e_t1_gpu);
     return;
   }
-  C.Invert();  // Now it's C^{-1}.
   // Next, compute (E_t^{0.5} C^{-1} E_t^{-0.5})
   // but it's really t+1, not t.
   for (int32 i = 0; i < R; i++) {
@@ -219,14 +275,60 @@ void OnlineNaturalGradient::ReorthogonalizeXt1(
   W_t1->AddMatMat(1.0, *temp_O, kNoTrans, *temp_W, kNoTrans, 0.0);
 }
 
+// makes sure certain invariants are being preserved
+void OnlineNaturalGradient::SelfTest() const {
+  KALDI_ASSERT(rho_t_ >= epsilon_);
+  BaseFloat d_t_max = d_t_.Max(), d_t_min = d_t_.Min();
+  KALDI_ASSERT(d_t_min >= epsilon_);
+  KALDI_ASSERT(d_t_min > 0.9 * delta_ * d_t_max);
+  KALDI_ASSERT(rho_t_ > 0.9 * delta_ * d_t_max);
+
+  int32 D = W_t_.NumCols(), R = W_t_.NumRows();
+  BaseFloat beta_t = rho_t_ * (1.0 + alpha_) + alpha_ * d_t_.Sum() / D;
+  Vector<BaseFloat> e_t(R, kUndefined), sqrt_e_t(R, kUndefined),
+      inv_sqrt_e_t(R, kUndefined);
+  ComputeEt(d_t_, beta_t, &e_t, &sqrt_e_t, &inv_sqrt_e_t);
+
+  CuSpMatrix<BaseFloat> S(R);
+  S.AddMat2(1.0, W_t_, kNoTrans, 0.0);
+  SpMatrix<BaseFloat> O(S);
+  for (int32 i = 0; i < R; i++) {
+    BaseFloat i_factor = inv_sqrt_e_t(i);
+    for (int32 j = 0; j <= i; j++) {
+      BaseFloat j_factor = inv_sqrt_e_t(j);
+      O(i, j) *= i_factor * j_factor;
+    }
+  }
+  if (!O.IsUnit(1.0e-04) || O(0, 0) != O(0, 0)) {
+    BaseFloat worst_error = 0.0;
+    int32 worst_i = 0, worst_j = 0;
+    for (int32 i = 0; i < R; i++) {
+      for (int32 j = 0; j < R; j++) {
+        BaseFloat elem = O(i, j);
+        BaseFloat error = fabs(elem - (i == j ? 1.0 : 0.0));
+        if (error > worst_error || error != error) {
+          worst_error = error;
+          worst_i = i;
+          worst_j = j;
+        }
+      }
+    }
+    if (worst_error > 1.0e-02 || worst_error != worst_error) {
+      KALDI_WARN << "Failed to verify W_t (worst error: O[" << worst_i << ','
+                 << worst_j << "] = " << O(worst_i, worst_j)
+                 << ", d_t = " << d_t_;
+    }
+  }
+}
+
 void OnlineNaturalGradient::PreconditionDirectionsInternal(
-    const int32 t,
     const BaseFloat rho_t,
+    const BaseFloat tr_X_Xt,
+    bool updating,
     const Vector<BaseFloat> &d_t,
     CuMatrixBase<BaseFloat> *WJKL_t,
-    CuMatrixBase<BaseFloat> *X_t,
-    CuVectorBase<BaseFloat> *row_prod,
-    BaseFloat *scale) {
+    CuMatrixBase<BaseFloat> *X_t) {
+  NVTX_RANGE(__func__);
   int32 N = X_t->NumRows(),  // Minibatch size.
       D = X_t->NumCols(),  // Dimensions of vectors we're preconditioning
       R = rank_;  // Rank of correction to unit matrix.
@@ -245,43 +347,11 @@ void OnlineNaturalGradient::PreconditionDirectionsInternal(
 
   H_t.AddMatMat(1.0, *X_t, kNoTrans, W_t, kTrans, 0.0);  // H_t = X_t W_t^T
 
-  bool locked = update_mutex_.TryLock();
-  if (locked) {
-    // Just hard-code it here that we do 10 updates before skipping any.
-    const int num_initial_updates = 10;
-    if (t_ > t || (num_updates_skipped_ < update_period_ - 1 &&
-                   t_ >= num_initial_updates)) {
-      update_mutex_.Unlock();
-      // We got the lock but we were already beaten to it by another thread, or
-      // we don't want to update yet due to update_period_ > 1 (this saves
-      // compute), so release the lock.
-      locked = false;
-    }
-  }
-
-  if (!locked) {
-    // We're not updating the parameters, either because another thread is
-    // working on updating them, or because another thread already did so from
-    // the same or later starting point (making our update stale), or because
-    // update_period_ > 1.  We just apply the preconditioning and return.
-
-    // note: we don't bother with any locks before incrementing
-    // num_updates_skipped_ below, because the worst that could happen is that,
-    // on very rare occasions, we could skip one or two more updates than we
-    // intended.
-    num_updates_skipped_++;
-
-    BaseFloat tr_Xt_XtT = TraceMatMat(*X_t, *X_t, kTrans);
+  if (!updating) {
+    // We're not updating the estimate of the Fisher matrix; we just apply the
+    // preconditioning and return.
     // X_hat_t = X_t - H_t W_t
     X_t->AddMatMat(-1.0, H_t, kNoTrans, W_t, kNoTrans, 1.0);
-    // each element i of row_prod will be inner product of row i of X_hat_t with
-    // itself.
-    row_prod->AddDiagMat2(1.0, *X_t, kNoTrans, 0.0);
-    BaseFloat tr_Xhat_XhatT = row_prod->Sum();
-    KALDI_ASSERT(tr_Xhat_XhatT == tr_Xhat_XhatT);  // Check for NaN.
-    BaseFloat gamma_t = (tr_Xhat_XhatT == 0.0 ? 1.0 :
-                         sqrt(tr_Xt_XtT / tr_Xhat_XhatT));
-    *scale = gamma_t;
     return;
   }
   J_t.AddMatMat(1.0, H_t, kTrans, *X_t, kNoTrans, 0.0);  // J_t = H_t^T X_t
@@ -338,37 +408,21 @@ void OnlineNaturalGradient::PreconditionDirectionsInternal(
   bool must_reorthogonalize = (c_t(0) > condition_threshold * c_t(R - 1));
 
   BaseFloat c_t_floor = pow(rho_t * (1 - eta), 2);
-  int32 nf = c_t.ApplyFloor(c_t_floor);
+  int32 nf;
+  c_t.ApplyFloor(c_t_floor, &nf);
   if (nf > 0)
     must_reorthogonalize = true;
   if (nf > 0 && self_debug_) {
     KALDI_WARN << "Floored " << nf << " elements of C_t.";
   }
-  BaseFloat tr_Xt_XtT_check;
-  if (self_debug_)
-    tr_Xt_XtT_check = TraceMatMat(*X_t, *X_t, kTrans);
 
   X_t->AddMatMat(-1.0, H_t, kNoTrans, W_t, kNoTrans, 1.0);  // X_hat_t = X_t - H_t W_t
-  // set *row_prod to inner products of each row of X_hat_t with itself.
-  row_prod->AddDiagMat2(1.0, *X_t, kNoTrans, 0.0);
-
-  BaseFloat tr_Xhat_XhatT = row_prod->Sum();
-  //  tr(X_t X_t^T) = tr(X_hat_t X_hat_t^T) - tr(L_t E_t) + 2 tr(L_t)
-  double tr_Xt_XtT = tr_Xhat_XhatT;
-  for (int32 i = 0; i < R; i++)
-    tr_Xt_XtT += L_t_cpu(i, i) * (2.0 - e_t(i));
-  if (self_debug_) {
-    KALDI_ASSERT(ApproxEqual(tr_Xt_XtT, tr_Xt_XtT_check));
-  }
-  BaseFloat gamma_t = (tr_Xhat_XhatT == 0.0 ? 1.0 :
-                       sqrt(tr_Xt_XtT / tr_Xhat_XhatT));
-  *scale = gamma_t;
 
   Vector<BaseFloat> sqrt_c_t(c_t);
   sqrt_c_t.ApplyPow(0.5);
 
   // \rho_{t+1} = 1/(D - R) (\eta/N tr(X_t X_t^T) + (1-\eta)(D \rho_t + tr(D_t)) - tr(C_t^{0.5})).
-  BaseFloat rho_t1 = 1.0 / (D - R) * (eta / N * tr_Xt_XtT
+  BaseFloat rho_t1 = 1.0 / (D - R) * (eta / N * tr_X_Xt
                                       + (1-eta)*(D * rho_t + d_t.Sum())
                                       - sqrt_c_t.Sum());
   // D_{t+1} = C_t^{0.5} - \rho_{t+1} I
@@ -377,7 +431,7 @@ void OnlineNaturalGradient::PreconditionDirectionsInternal(
   BaseFloat floor_val = std::max(epsilon_, delta_ * sqrt_c_t.Max());
   if (rho_t1 < floor_val)
     rho_t1 = floor_val;
-  d_t1.ApplyFloor(epsilon_);
+  d_t1.ApplyFloor(floor_val);
 
   CuMatrix<BaseFloat> W_t1(R, D);  // W_{t+1}
   ComputeWt1(N, d_t, d_t1, rho_t, rho_t1, U_t, sqrt_c_t, inv_sqrt_e_t,
@@ -387,43 +441,57 @@ void OnlineNaturalGradient::PreconditionDirectionsInternal(
     if (self_debug_) {
       KALDI_WARN << "Reorthogonalizing.";
     }
-    ReorthogonalizeXt1(d_t1,
+    ReorthogonalizeRt1(d_t1,
                        rho_t1,
                        &W_t1,
                        &J_t,
                        &L_t);
   }
 
-
-  // Commit the new parameters.
-  read_write_mutex_.Lock();
-  KALDI_ASSERT(t_ == t);  // we already ensured this.
-  t_ = t + 1;
-  num_updates_skipped_ = 0;
   W_t_.Swap(&W_t1);
   d_t_.CopyFromVec(d_t1);
   rho_t_ = rho_t1;
 
-  read_write_mutex_.Unlock();
-  update_mutex_.Unlock();
+  if (self_debug_)
+    SelfTest();
 }
 
+bool OnlineNaturalGradient::Updating() const {
+  // Just hard-code it here that we do 10 initial updates before skipping any.
+  // This must be > 'num_init_iters = 3' from Init().
+  const int num_initial_updates = 10;
+
+  return (!frozen_ &&
+          (t_ <= num_initial_updates ||
+           (t_ - num_initial_updates) % update_period_ == 0));
+}
+
+
 BaseFloat OnlineNaturalGradient::Eta(int32 N) const {
-  KALDI_ASSERT(num_samples_history_ > 0.0);
-  return 1.0 - exp(-N / num_samples_history_);
+  if (num_minibatches_history_ > 0.0) {
+    KALDI_ASSERT(num_minibatches_history_ > 1.0);
+    return 1.0 / num_minibatches_history_;
+  } else {
+    KALDI_ASSERT(num_samples_history_ > 0.0);
+    BaseFloat ans = 1.0 - exp(-N / num_samples_history_);
+    // Don't let eta approach 1 too closely, as it can lead to NaN's appearing if
+    // the input is all zero.
+    if (ans > 0.9) ans = 0.9;
+    return ans;
+  }
 }
 
 void OnlineNaturalGradient::ComputeWt1(int32 N,
-                                      const VectorBase<BaseFloat> &d_t,
-                                      const VectorBase<BaseFloat> &d_t1,
-                                      BaseFloat rho_t,
-                                      BaseFloat rho_t1,
-                                      const MatrixBase<BaseFloat> &U_t,
-                                      const VectorBase<BaseFloat> &sqrt_c_t,
-                                      const VectorBase<BaseFloat> &inv_sqrt_e_t,
-                                      const CuMatrixBase<BaseFloat> &W_t,
-                                      CuMatrixBase<BaseFloat> *J_t,
-                                      CuMatrixBase<BaseFloat> *W_t1) const {
+                                       const VectorBase<BaseFloat> &d_t,
+                                       const VectorBase<BaseFloat> &d_t1,
+                                       BaseFloat rho_t,
+                                       BaseFloat rho_t1,
+                                       const MatrixBase<BaseFloat> &U_t,
+                                       const VectorBase<BaseFloat> &sqrt_c_t,
+                                       const VectorBase<BaseFloat> &inv_sqrt_e_t,
+                                       const CuMatrixBase<BaseFloat> &W_t,
+                                       CuMatrixBase<BaseFloat> *J_t,
+                                       CuMatrixBase<BaseFloat> *W_t1) const {
 
   int32 R = d_t.Dim(), D = W_t.NumCols();
   BaseFloat eta = Eta(N);
@@ -444,7 +512,7 @@ void OnlineNaturalGradient::ComputeWt1(int32 N,
   // B_t = J_t + (1-\eta)/(\eta/N) (D_t + \rho_t I) W_t
   J_t->AddDiagVecMat(1.0, w_t_coeff_gpu, W_t, kNoTrans, 1.0);
 
-  // A_t = (\eta/N) E_{t+1}^{0.5} C_t^{-0.5} U_t^T E_t^{-0.5} B_t
+  // A_t = (\eta/N) E_{t+1}^{0.5} C_t^{-0.5} U_t^T E_t^{-0.5}
   Matrix<BaseFloat> A_t(U_t, kTrans);
   for (int32 i = 0; i < R; i++) {
     BaseFloat i_factor = (eta / N) * sqrt_e_t1(i) * inv_sqrt_c_t(i);
@@ -456,38 +524,6 @@ void OnlineNaturalGradient::ComputeWt1(int32 N,
   // W_{t+1} = A_t B_t
   CuMatrix<BaseFloat> A_t_gpu(A_t);
   W_t1->AddMatMat(1.0, A_t_gpu, kNoTrans, *J_t, kNoTrans, 0.0);
-
-  if (self_debug_) {
-    CuMatrix<BaseFloat> W_t1_prod(R, R);
-    W_t1_prod.SymAddMat2(1.0, *W_t1, kNoTrans, 0.0);
-    W_t1_prod.CopyLowerToUpper();
-    Matrix<BaseFloat> W_t1_prod_cpu(W_t1_prod);
-    // Verifying that W_{t+1} W_{t+1}^T == E_t, via
-    // E_{-0.5} W_{t+1} W_{t+1}^T E_{-0.5} == I.
-    for (int32 i = 0; i < R; i++)
-      for (int32 j = 0; j < R; j++)
-        W_t1_prod_cpu(i, j) *= inv_sqrt_e_t1(i) * inv_sqrt_e_t1(j);
-
-    BaseFloat worst_error = 0.0;
-    int32 worst_i = 0, worst_j = 0;
-    for (int32 i = 0; i < R; i++) {
-      for (int32 j = 0; j < R; j++) {
-        BaseFloat elem = W_t1_prod_cpu(i, j);
-        BaseFloat error = fabs(elem - (i == j ? 1.0 : 0.0));
-        if (error > worst_error) {
-          worst_error = error;
-          worst_i = i;
-          worst_j = j;
-        }
-      }
-    }
-    if (worst_error > 1.0e-02) {
-      KALDI_WARN << "Failed to verify W_{t+1}, the following should be unit: "
-                 << W_t1_prod_cpu << " (worst error: W_{t+1}[" << worst_i << ','
-                 << worst_j << "] = " << W_t1_prod_cpu(worst_i, worst_j)
-                 << ", d_t = " << d_t_;
-    }
-  }
 }
 
 void OnlineNaturalGradient::ComputeZt(int32 N,
@@ -539,115 +575,15 @@ void OnlineNaturalGradient::ComputeEt(const VectorBase<BaseFloat> &d_t,
 }
 
 
-/**
-   I'm not very satisfied with the implementation of this function, but a
-   careful GPU-oriented version would take a while to do correctly, mainly due
-   to the necessity to implement orthogonalization of a matrix where the matrix
-   might have a reduced rank and we might have to "complete" it with random
-   rows.  Anyway, in the current implementation we just move an inner-product
-   matrix to the CPU and compute the approximate top eigenvalues there.
- */
-void ApproxEigsOfProduct(const CuMatrixBase<BaseFloat> &M,
-                         MatrixTransposeType trans,
-                         CuMatrixBase<BaseFloat> *P,
-                         CuVectorBase<BaseFloat> *s) {
-  int32 R = P->NumRows(), D = P->NumCols();
-
-  // First make sure, for simplicity, that trans == kNoTrans.
-  if (trans == kTrans) {
-    CuMatrix<BaseFloat> M_trans(M, kTrans);
-    ApproxEigsOfProduct(M_trans, kNoTrans, P, s);
-    return;
-  }
-  // Next, make sure we can handle the case when the number of requested
-  // eigenvalues is more than smaller of (#columns/#rows)... this makes sense
-  // in a situation where we are asked for a number eigenvalues of R R^T that
-  // is greater than the #cols of R.  The remaining eigenvectors should be zero.
-  if (R > std::min(M.NumRows(), M.NumCols())) {
-    KALDI_ASSERT(R <= D);
-    int32 R_tmp = std::min(M.NumRows(), M.NumCols());
-    CuSubMatrix<BaseFloat> P_part(*P, 0, R_tmp, 0, D);
-    CuSubVector<BaseFloat> s_part(*s, 0, R_tmp);
-    s->SetZero();
-    ApproxEigsOfProduct(M, trans, &P_part, &s_part);
-    Matrix<BaseFloat> P_cpu(*P);
-    P_cpu.OrthogonalizeRows();  // Will fill the remaining rows of P_cpu with
-                                // random vectors and ensure P P^T = I.
-    P->CopyFromMat(P_cpu);
-    return;
-  }
-
-  KALDI_ASSERT(R <= D && R > 0 && s->Dim() == R);
-  if (trans == kNoTrans) {
-    KALDI_ASSERT(D == M.NumRows());
-  } else {
-    KALDI_ASSERT(D == M.NumCols());
-  }
-
-  if (M.NumRows() < M.NumCols()) {
-    // Quicker to compute eigenvalues of M M^T
-    CuMatrix<BaseFloat> MMT(M.NumRows(), M.NumRows());
-    MMT.SymAddMat2(1.0, M, kNoTrans, 0.0);
-    CuSpMatrix<BaseFloat> MMT_sp(MMT, kTakeLower);
-    SpMatrix<BaseFloat> MMT_cpu(MMT_sp);
-
-    Vector<BaseFloat> s_cpu(R);
-    Matrix<BaseFloat> P_cpu(D, R);  // It's actually the columns of P that are
-                                    // the eigenvectors.
-    // Uses default configuration to get top eigenvalues approximately.
-    MMT_cpu.TopEigs(&s_cpu, &P_cpu);
-    P->CopyFromMat(P_cpu, kTrans);
-    s->CopyFromVec(s_cpu);
-  } else {
-    // Quicker to compute eigenvalues of M^T M
-    int32 D = M.NumCols();
-    CuMatrix<BaseFloat> MTM(D, D);
-    MTM.SymAddMat2(1.0, M, kTrans, 0.0);
-    CuSpMatrix<BaseFloat> MTM_sp(MTM, kTakeLower);
-    SpMatrix<BaseFloat> MTM_cpu(MTM_sp);
-
-    Vector<BaseFloat> s_cpu(R);
-    Matrix<BaseFloat> Q_cpu(D, R);  // It's actually the columns of Q that are
-                                    // the eigenvectors.
-    MTM_cpu.TopEigs(&s_cpu, &Q_cpu);  // Uses default configuration.
-
-    // OK, suppose we have some eigenvector v, so M^T M v = \lambda v.  Define w
-    // = M v.  Then M M^T M v = M (M^T M v) = M (\lambda v) = \lambda M M^T w.
-    // Then w = M v is also an eigenvector of M M^T, with the same eigenvalue
-    // \lambda.
-    // However, we might have a problem if M v == 0 (this is only possible if
-    // some eigenvalues are zero); in this case we won't be able to renormalize
-    // w to have unit norm.  We'll let OrthogonalizeRows() take care of that,
-    // though.  Anyway, just to avoid having to think about it to hard,
-    // we'll recompute the eigenvalues after computing P = Q^T M^T below
-    // and orthogonalizing its rows.
-    // Note: the tranpose on Q in the above equation is because our Q_cpu
-    // has its columns, not rows, as the eigenvectors.
-
-    Matrix<BaseFloat> P_cpu(R, M.NumRows());
-    Matrix<BaseFloat> M_cpu(M);
-    P_cpu.AddMatMat(1.0, Q_cpu, kTrans, M_cpu, kTrans, 0.0);
-    P_cpu.OrthogonalizeRows();
-    P->CopyFromMat(P_cpu);
-
-    // we will set s according to diag(s) = P M M^T P^T,
-    // which we can get by computing P M, and doing AddDiagMat2
-    CuMatrix<BaseFloat> PM(R, M.NumCols());
-    PM.AddMatMat(1.0, *P, kNoTrans, M, kNoTrans, 0.0);
-    s->SetZero();  // In case it had NaN's in it.
-    s->AddDiagMat2(1.0, PM, kNoTrans, 0.0);
-  }
-}
-
 OnlineNaturalGradient::OnlineNaturalGradient(const OnlineNaturalGradient &other):
     rank_(other.rank_), update_period_(other.update_period_),
     num_samples_history_(other.num_samples_history_),
+    num_minibatches_history_(other.num_minibatches_history_),
     alpha_(other.alpha_), epsilon_(other.epsilon_), delta_(other.delta_),
-    t_(other.t_), num_updates_skipped_(other.num_updates_skipped_),
+    frozen_(other.frozen_), t_(other.t_),
     self_debug_(other.self_debug_), W_t_(other.W_t_),
-    rho_t_(other.rho_t_), d_t_(other.d_t_) {
-  // use default constructor for the mutextes.
-}
+    rho_t_(other.rho_t_), d_t_(other.d_t_) { }
+
 
 OnlineNaturalGradient& OnlineNaturalGradient::operator = (
     const OnlineNaturalGradient &other) {
@@ -656,6 +592,7 @@ OnlineNaturalGradient& OnlineNaturalGradient::operator = (
   num_samples_history_ = other.num_samples_history_;
   alpha_ = other.alpha_;
   epsilon_ = other.epsilon_;
+  delta_ = other.delta_;
   t_ = other.t_;
   self_debug_ = other.self_debug_;
   W_t_ = other.W_t_;
@@ -677,11 +614,32 @@ void OnlineNaturalGradient::SetNumSamplesHistory(BaseFloat num_samples_history) 
                num_samples_history < 1.0e+6);
   num_samples_history_ = num_samples_history;
 }
+void OnlineNaturalGradient::SetNumMinibatchesHistory(
+    BaseFloat num_minibatches_history) {
+  KALDI_ASSERT(num_minibatches_history > 1.0);
+  num_minibatches_history_ = num_minibatches_history;
+}
+
 void OnlineNaturalGradient::SetAlpha(BaseFloat alpha) {
   KALDI_ASSERT(alpha >= 0.0);
   alpha_ = alpha;
 }
 
+void OnlineNaturalGradient::Swap(OnlineNaturalGradient *other) {
+  std::swap(rank_, other->rank_);
+  std::swap(update_period_, other->update_period_);
+  std::swap(num_samples_history_, other->num_samples_history_);
+  std::swap(num_minibatches_history_, other->num_minibatches_history_);
+  std::swap(alpha_, other->alpha_);
+  std::swap(epsilon_, other->epsilon_);
+  std::swap(delta_, other->delta_);
+  std::swap(frozen_, other->frozen_);
+  std::swap(t_, other->t_);
+  std::swap(self_debug_, other->self_debug_);
+  W_t_.Swap(&(other->W_t_));
+  std::swap(rho_t_, other->rho_t_);
+  d_t_.Swap(&(other->d_t_));
+}
 
-}
-}
+}  // namespace nnet3
+}  // namespace kaldi

@@ -3,6 +3,8 @@
 // Copyright 2009-2011  Ondrej Glembek;  Microsoft Corporation;  Lukas Burget;
 //                      Saarland University;  Petr Schwarz;  Yanmin Qian;
 //                      Karel Vesely;  Go Vivace Inc.;  Haihua Xu
+//           2017       Shiyin Kang
+//           2019       Yiwen Shao
 
 // See ../../COPYING for clarification regarding multiple authors
 //
@@ -21,6 +23,8 @@
 
 #ifndef KALDI_MATRIX_KALDI_MATRIX_H_
 #define KALDI_MATRIX_KALDI_MATRIX_H_ 1
+
+#include <algorithm>
 
 #include "matrix/matrix-common.h"
 
@@ -51,13 +55,15 @@ class MatrixBase {
   friend class CuMatrix<Real>;
   friend class CuSubMatrix<Real>;
   friend class CuPackedMatrix<Real>;
-  
   friend class PackedMatrix<Real>;
+  friend class SparseMatrix<Real>;
+  friend class SparseMatrix<float>;
+  friend class SparseMatrix<double>;
 
-  /// Returns number of rows (or zero for emtpy matrix).
+  /// Returns number of rows (or zero for empty matrix).
   inline MatrixIndexT  NumRows() const { return num_rows_; }
 
-  /// Returns number of columns (or zero for emtpy matrix).
+  /// Returns number of columns (or zero for empty matrix).
   inline MatrixIndexT NumCols() const { return num_cols_; }
 
   /// Stride (distance in memory between each row).  Will be >= NumCols.
@@ -103,7 +109,7 @@ class MatrixBase {
   /// Indexing operator, provided for ease of debugging (gdb doesn't work
   /// with parenthesis operator).
   Real &Index (MatrixIndexT r, MatrixIndexT c) {  return (*this)(r, c); }
-  
+
   /// Indexing operator, const
   /// (only checks sizes if compiled with -DKALDI_PARANOID)
   inline const Real operator() (MatrixIndexT r, MatrixIndexT c) const {
@@ -146,20 +152,21 @@ class MatrixBase {
   template<typename OtherReal>
   void CopyFromTp(const TpMatrix<OtherReal> &M,
                   MatrixTransposeType trans = kNoTrans);
-  
+
   /// Copy from CUDA matrix.  Implemented in ../cudamatrix/cu-matrix.h
-  template<typename OtherReal>  
+  template<typename OtherReal>
   void CopyFromMat(const CuMatrixBase<OtherReal> &M,
                    MatrixTransposeType trans = kNoTrans);
 
-  /// Inverse of vec() operator. Copies vector into matrix, row-by-row.
-  /// Note that rv.Dim() must either equal NumRows()*NumCols() or
-  /// NumCols()-- this has two modes of operation.
+  /// This function has two modes of operation.  If v.Dim() == NumRows() *
+  /// NumCols(), then treats the vector as a row-by-row concatenation of a
+  /// matrix and copies to *this.
+  /// if v.Dim() == NumCols(), it sets each row of *this to a copy of v.
   void CopyRowsFromVec(const VectorBase<Real> &v);
 
   /// This version of CopyRowsFromVec is implemented in ../cudamatrix/cu-vector.cc
   void CopyRowsFromVec(const CuVectorBase<Real> &v);
-  
+
   template<typename OtherReal>
   void CopyRowsFromVec(const VectorBase<OtherReal> &v);
 
@@ -167,7 +174,7 @@ class MatrixBase {
   /// Note that rv.Dim() must either equal NumRows()*NumCols() or NumRows();
   /// this has two modes of operation.
   void CopyColsFromVec(const VectorBase<Real> &v);
-  
+
   /// Copy vector into specific column of matrix.
   void CopyColFromVec(const VectorBase<Real> &v, const MatrixIndexT col);
   /// Copy vector into specific row of matrix.
@@ -202,11 +209,11 @@ class MatrixBase {
   inline SubMatrix<Real> RowRange(const MatrixIndexT row_offset,
                                   const MatrixIndexT num_rows) const {
     return SubMatrix<Real>(*this, row_offset, num_rows, 0, num_cols_);
-  }  
+  }
   inline SubMatrix<Real> ColRange(const MatrixIndexT col_offset,
                                   const MatrixIndexT num_cols) const {
     return SubMatrix<Real>(*this, 0, num_rows_, col_offset, num_cols);
-  }  
+  }
 
   /* Various special functions. */
   /// Returns sum of all elements in matrix.
@@ -231,6 +238,8 @@ class MatrixBase {
 
   /// Set, element-by-element, *this = max(*this, A)
   void Max(const MatrixBase<Real> &A);
+  /// Set, element-by-element, *this = min(*this, A)
+  void Min(const MatrixBase<Real> &A);
 
   /// Equivalent to (*this) = (*this) * diag(scale).  Scaling
   /// each column by a scalar taken from that dimension of the vector.
@@ -244,10 +253,10 @@ class MatrixBase {
   /// j'th group of elements by src(i, j).  Requires src.NumRows() ==
   /// this->NumRows() and this->NumCols() % src.NumCols() == 0.
   void MulRowsGroupMat(const MatrixBase<Real> &src);
-    
+
   /// Returns logdet of matrix.
   Real LogDet(Real *det_sign = NULL) const;
-  
+
   /// matrix inverse.
   /// if inverse_needed = false, will fill matrix with garbage.
   /// (only useful if logdet wanted).
@@ -281,7 +290,7 @@ class MatrixBase {
   /// and src.NumCols() must equal this.NumCols()
   void CopyRows(const MatrixBase<Real> &src,
                 const MatrixIndexT *indices);
-  
+
   /// Add column indices[r] of src to column r.
   /// As a special case, if indexes[i] == -1, skip column i
   /// indices.size() must equal this->NumCols(),
@@ -293,7 +302,7 @@ class MatrixBase {
   /// Copies row r of this matrix from an array of floats at the location given
   /// by src[r]. If any src[r] is NULL then this.Row(r) will be set to zero.
   /// Note: we are using "pointer to const pointer to const object" for "src",
-  ///       because we may create "src" by calling Data() of const CuArray 
+  ///       because we may create "src" by calling Data() of const CuArray
   void CopyRows(const Real *const *src);
 
   /// Copies row r of this matrix to the array of floats at the location given
@@ -320,34 +329,52 @@ class MatrixBase {
   /// to by the pointers in "dst" overlap (e.g. none of the pointers should be
   /// the same).
   void AddToRows(Real alpha, Real *const *dst) const;
- 
-  /// Applies floor to all matrix elements
-  void ApplyFloor(Real floor_val);
 
-  /// Applies floor to all matrix elements
-  void ApplyCeiling(Real ceiling_val);
+  /// For each row i of *this, adds this->Row(i) to
+  /// dst->Row(indexes(i)) if indexes(i) >= 0, else do nothing.
+  /// Requires that all the indexes[i] that are >= 0
+  /// be distinct, otherwise the behavior is undefined.
+  void AddToRows(Real alpha,
+                 const MatrixIndexT *indexes,
+                 MatrixBase<Real> *dst) const;
 
-  /// Calculates log of all the matrix elemnts
-  void ApplyLog();
+  inline void ApplyPow(Real power) {
+    this -> Pow(*this, power);
+  }
 
-  /// Exponentiate each of the elements.
-  void ApplyExp();
 
-  /// Applies power to all matrix elements
-  void ApplyPow(Real power);
+  inline void ApplyPowAbs(Real power, bool include_sign=false) {
+    this -> PowAbs(*this, power, include_sign);
+  }
 
-  /// Apply power to the absolute value of each element. 
-  /// Include the sign of the input element if include_sign == true.
-  /// If the power is negative and the input to the power is zero,
-  /// The output will be set zero.
-  void ApplyPowAbs(Real power, bool include_sign=false);
-  
-  /// Applies the Heaviside step function (x > 0 ? 1 : 0) to all matrix elements
-  /// Note: in general you can make different choices for x = 0, but for now
-  /// please leave it as it (i.e. returning zero) because it affects the
-  /// RectifiedLinearComponent in the neural net code.
-  void ApplyHeaviside();
-  
+  inline void ApplyHeaviside() {
+    this -> Heaviside(*this);
+  }
+
+  inline void ApplyFloor(Real floor_val) {
+    this -> Floor(*this, floor_val);
+  }
+
+  inline void ApplyCeiling(Real ceiling_val) {
+    this -> Ceiling(*this, ceiling_val);
+  }
+
+  inline void ApplyExp() {
+    this -> Exp(*this);
+  }
+
+  inline void ApplyExpSpecial() {
+    this -> ExpSpecial(*this);
+  }
+
+  inline void ApplyExpLimited(Real lower_limit, Real upper_limit) {
+    this -> ExpLimited(*this, lower_limit, upper_limit);
+  }
+
+  inline void ApplyLog() {
+    this -> Log(*this);
+  }
+
   /// Eigenvalue Decomposition of a square NxN matrix into the form (*this) = P D
   /// P^{-1}.  Be careful: the relationship of D to the eigenvalues we output is
   /// slightly complicated, due to the need for P to be real.  In the symmetric
@@ -408,7 +435,7 @@ class MatrixBase {
 
   void TestUninitialized() const; // This function is designed so that if any element
   // if the matrix is uninitialized memory, valgrind will complain.
-  
+
   /// Returns condition number by computing Svd.  Works even if cols > rows.
   /// Returns infinity if all singular values are zero.
   Real Cond() const;
@@ -452,13 +479,48 @@ class MatrixBase {
   /// Apply soft-max to the collection of all elements of the
   /// matrix and return normalizer (log sum of exponentials).
   Real ApplySoftMax();
-  
+
   /// Set each element to the sigmoid of the corresponding element of "src".
   void Sigmoid(const MatrixBase<Real> &src);
 
+  /// Sets each element to the Heaviside step function (x > 0 ? 1 : 0) of the
+  /// corresponding element in "src".  Note: in general you can make different
+  /// choices for x = 0, but for now please leave it as it (i.e. returning zero)
+  /// because it affects the RectifiedLinearComponent in the neural net code.
+  void Heaviside(const MatrixBase<Real> &src);
+
+  void Exp(const MatrixBase<Real> &src);
+
+  void Pow(const MatrixBase<Real> &src, Real power);
+
+  void Log(const MatrixBase<Real> &src);
+
+  /// Apply power to the absolute value of each element.
+  /// If include_sign is true, the result will be multiplied with
+  /// the sign of the input value.
+  /// If the power is negative and the input to the power is zero,
+  /// The output will be set zero. If include_sign is true, it will
+  /// multiply the result by the sign of the input.
+  void PowAbs(const MatrixBase<Real> &src, Real power, bool include_sign=false);
+
+  void Floor(const MatrixBase<Real> &src, Real floor_val);
+
+  void Ceiling(const MatrixBase<Real> &src, Real ceiling_val);
+
+  /// For each element x of the matrix, set it to
+  /// (x < 0 ? exp(x) : x + 1).  This function is used
+  /// in our RNNLM training.
+  void ExpSpecial(const MatrixBase<Real> &src);
+
+  /// This is equivalent to running:
+  /// Floor(src, lower_limit);
+  /// Ceiling(src, upper_limit);
+  /// Exp(src)
+  void ExpLimited(const MatrixBase<Real> &src, Real lower_limit, Real upper_limit);
+
   /// Set each element to y = log(1 + exp(x))
   void SoftHinge(const MatrixBase<Real> &src);
-  
+
   /// Apply the function y(i) = (sum_{j = i*G}^{(i+1)*G-1} x_j^(power))^(1 / p).
   /// Requires src.NumRows() == this->NumRows() and  src.NumCols() % this->NumCols() == 0.
   void GroupPnorm(const MatrixBase<Real> &src, Real power);
@@ -497,17 +559,26 @@ class MatrixBase {
   // element-by-element, set *this = diff * (1.0 - value^2).
   void DiffTanh(const MatrixBase<Real> &value,
                 const MatrixBase<Real> &diff);
-  
+
   /** Uses Svd to compute the eigenvalue decomposition of a symmetric positive
    * semi-definite matrix: (*this) = rP * diag(rS) * rP^T, with rP an
    * orthogonal matrix so rP^{-1} = rP^T.   Throws exception if input was not
    * positive semi-definite (check_thresh controls how stringent the check is;
    * set it to 2 to ensure it won't ever complain, but it will zero out negative
    * dimensions in your matrix.
+   *
+   * Caution: if you want the eigenvalues, it may make more sense to convert to
+   * SpMatrix and use Eig() function there, which uses eigenvalue decomposition
+   * directly rather than SVD.
   */
   void SymPosSemiDefEig(VectorBase<Real> *s, MatrixBase<Real> *P,
                         Real check_thresh = 0.001);
 
+  // There are some weird issue with template friend function in a class
+  // template in Windows version of nvcc. This is simple an ugly walkaround.
+#if defined(__NVCC__) && defined(_MSC_VER)
+  template<typename Real>
+#endif
   friend Real kaldi::TraceMatMat<Real>(const MatrixBase<Real> &A,
       const MatrixBase<Real> &B, MatrixTransposeType trans);  // tr (A B)
 
@@ -528,14 +599,32 @@ class MatrixBase {
   /// [each row of *this] += alpha * v
   template<typename OtherReal>
   void AddVecToRows(const Real alpha, const VectorBase<OtherReal> &v);
-  
+
   /// [each col of *this] += alpha * v
   template<typename OtherReal>
-  void AddVecToCols(const Real alpha, const VectorBase<OtherReal> &v);      
-  
+  void AddVecToCols(const Real alpha, const VectorBase<OtherReal> &v);
+
   /// *this += alpha * M [or M^T]
   void AddMat(const Real alpha, const MatrixBase<Real> &M,
               MatrixTransposeType transA = kNoTrans);
+
+  /// *this += alpha * A [or A^T].
+  void AddSmat(Real alpha, const SparseMatrix<Real> &A,
+               MatrixTransposeType trans = kNoTrans);
+
+  /// (*this) = alpha * op(A) * B + beta * (*this), where A is sparse.
+  /// Multiplication of sparse with dense matrix.  See also AddMatSmat.
+  void AddSmatMat(Real alpha, const SparseMatrix<Real> &A,
+                  MatrixTransposeType transA, const MatrixBase<Real> &B,
+                  Real beta);
+
+  /// (*this) = alpha * A * op(B) + beta * (*this), where B is sparse
+  /// and op(B) is either B or trans(B) depending on the 'transB' argument.
+  /// This is multiplication of a dense by a sparse matrix.  See also
+  /// AddSmatMat.
+  void AddMatSmat(Real alpha, const MatrixBase<Real> &A,
+                  const SparseMatrix<Real> &B, MatrixTransposeType transB,
+                  Real beta);
 
   /// *this = beta * *this + alpha * M M^T, for symmetric matrices.  It only
   /// updates the lower triangle of *this.  It will leave the matrix asymmetric;
@@ -546,13 +635,13 @@ class MatrixBase {
   /// *this = beta * *this + alpha * diag(v) * M [or M^T].
   /// The same as adding M but scaling each row M_i by v(i).
   void AddDiagVecMat(const Real alpha, const VectorBase<Real> &v,
-                     const MatrixBase<Real> &M, MatrixTransposeType transM, 
+                     const MatrixBase<Real> &M, MatrixTransposeType transM,
                      Real beta = 1.0);
- 
-  /// *this = beta * *this + alpha * M [or M^T] * diag(v) 
+
+  /// *this = beta * *this + alpha * M [or M^T] * diag(v)
   /// The same as adding M but scaling each column M_j by v(j).
-  void AddMatDiagVec(const Real alpha, 
-                     const MatrixBase<Real> &M, MatrixTransposeType transM, 
+  void AddMatDiagVec(const Real alpha,
+                     const MatrixBase<Real> &M, MatrixTransposeType transM,
                      VectorBase<Real> &v,
                      Real beta = 1.0);
 
@@ -561,7 +650,7 @@ class MatrixBase {
                          const MatrixBase<Real>& A,
                          const MatrixBase<Real>& B,
                          const Real beta);
-  
+
   /// *this += alpha * S
   template<typename OtherReal>
   void AddSp(const Real alpha, const SpMatrix<OtherReal> &S);
@@ -570,10 +659,10 @@ class MatrixBase {
                  const MatrixBase<Real>& A, MatrixTransposeType transA,
                  const MatrixBase<Real>& B, MatrixTransposeType transB,
                  const Real beta);
- 
+
   /// *this = a * b / c (by element; when c = 0, *this = a)
-  void AddMatMatDivMat(const MatrixBase<Real>& A,
-                        const MatrixBase<Real>& B,
+  void SetMatMatDivMat(const MatrixBase<Real>& A,
+                       const MatrixBase<Real>& B,
                        const MatrixBase<Real>& C);
 
   /// A version of AddMatMat specialized for when the second argument
@@ -584,7 +673,7 @@ class MatrixBase {
                   const Real beta);
 
   /// A version of AddMatMat specialized for when the first argument
-  /// contains a lot of zeroes.  
+  /// contains a lot of zeroes.
   void AddSmatMat(const Real alpha,
                   const MatrixBase<Real>& A, MatrixTransposeType transA,
                   const MatrixBase<Real>& B, MatrixTransposeType transB,
@@ -661,7 +750,7 @@ class MatrixBase {
 
   /// Copy upper triangle to lower triangle (symmetrize)
   void CopyUpperToLower();
-  
+
   /// This function orthogonalizes the rows of a matrix using the Gram-Schmidt
   /// process.  It is only applicable if NumRows() <= NumCols().  It will use
   /// random number generation to fill in rows with something nonzero, in cases
@@ -718,7 +807,7 @@ class MatrixBase {
   /// data memory area
   Real*   data_;
 
-  /// these atributes store the real matrix size as it is stored in memory
+  /// these attributes store the real matrix size as it is stored in memory
   /// including memalignment
   MatrixIndexT    num_cols_;   /// < Number of columns
   MatrixIndexT    num_rows_;   /// < Number of rows
@@ -737,12 +826,12 @@ class Matrix : public MatrixBase<Real> {
   /// Empty constructor.
   Matrix();
 
-  /// Basic constructor.  Sets to zero by default.
-  /// if set_zero == false, memory contents are undefined.
+  /// Basic constructor.
   Matrix(const MatrixIndexT r, const MatrixIndexT c,
-         MatrixResizeType resize_type = kSetZero):
-      MatrixBase<Real>() { Resize(r, c, resize_type); }
-  
+         MatrixResizeType resize_type = kSetZero,
+         MatrixStrideType stride_type = kDefaultStride):
+      MatrixBase<Real>() { Resize(r, c, resize_type, stride_type); }
+
   /// Copy constructor from CUDA matrix
   /// This is defined in ../cudamatrix/cu-matrix.h
   template<typename OtherReal>
@@ -760,7 +849,7 @@ class Matrix : public MatrixBase<Real> {
   /// Allocates new memory.
   explicit Matrix(const MatrixBase<Real> & M,
                   MatrixTransposeType trans = kNoTrans);
-  
+
   /// Same as above, but need to avoid default copy constructor.
   Matrix(const Matrix<Real> & M);  //  (cannot make explicit)
 
@@ -779,7 +868,7 @@ class Matrix : public MatrixBase<Real> {
 
   /// Constructor from CompressedMatrix
   explicit Matrix(const CompressedMatrix &C);
-  
+
   /// Copy constructor taking TpMatrix...
   template <typename OtherReal>
   explicit Matrix(const TpMatrix<OtherReal> & M,
@@ -799,7 +888,7 @@ class Matrix : public MatrixBase<Real> {
 
   /// Remove a specified row.
   void RemoveRow(MatrixIndexT i);
-  
+
   /// Transpose the matrix.  Works for non-square
   /// matrices as well as square ones.
   void Transpose();
@@ -813,10 +902,16 @@ class Matrix : public MatrixBase<Real> {
   ///   -if kUndefined, the new data will be undefined
   ///   -if kCopyData, the new data will be the same as the old data in any
   ///      shared positions, and zero elsewhere.
+  ///
+  /// You can set stride_type to kStrideEqualNumCols to force the stride
+  /// to equal the number of columns; by default it is set so that the stride
+  /// in bytes is a multiple of 16.
+  ///
   /// This function takes time proportional to the number of data elements.
   void Resize(const MatrixIndexT r,
               const MatrixIndexT c,
-              MatrixResizeType resize_type = kSetZero);
+              MatrixResizeType resize_type = kSetZero,
+              MatrixStrideType stride_type = kDefaultStride);
 
   /// Assignment operator that takes MatrixBase.
   Matrix<Real> &operator = (const MatrixBase<Real> &other) {
@@ -835,18 +930,19 @@ class Matrix : public MatrixBase<Real> {
     MatrixBase<Real>::CopyFromMat(other);
     return *this;
   }
-  
+
 
  private:
   /// Deallocates memory and sets to empty matrix (dimension 0, 0).
   void Destroy();
-  
+
   /// Init assumes the current class contents are invalid (i.e. junk or have
   /// already been freed), and it sets the matrix to newly allocated memory with
   /// the specified number of rows and columns.  r == c == 0 is acceptable.  The data
   /// memory contents will be undefined.
   void Init(const MatrixIndexT r,
-            const MatrixIndexT c);
+            const MatrixIndexT c,
+            const MatrixStrideType stride_type);
 
 };
 /// @} end "addtogroup matrix_group"
@@ -901,16 +997,16 @@ class SubMatrix : public MatrixBase<Real> {
             const MatrixIndexT r,   // number of rows, r > 0
             const MatrixIndexT co,  // column offset, 0 < co < NumCols()
             const MatrixIndexT c);   // number of columns, c > 0
-  
+
   // This initializer is mostly intended for use in CuMatrix and related
   // classes.  Be careful!
   SubMatrix(Real *data,
             MatrixIndexT num_rows,
             MatrixIndexT num_cols,
             MatrixIndexT stride);
-  
+
   ~SubMatrix<Real>() {}
-  
+
   /// This type of constructor is needed for Range() to work [in Matrix base
   /// class]. Cannot make it explicit.
   SubMatrix<Real> (const SubMatrix &other):

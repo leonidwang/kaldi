@@ -46,12 +46,15 @@ int main(int argc, char *argv[]) {
     ParseOptions po(usage);
 
     int32 num_segments = 1;
-    std::string use_gpu = "optional";
+    std::string use_gpu = "no";
+    NnetComputeProbOptions compute_prob_opts;
+    compute_prob_opts.compute_deriv = true;
 
     po.Register("num-segments", &num_segments,
                 "Number of line segments used for computing derivatives");
     po.Register("use-gpu", &use_gpu,
                 "yes|no|optional|wait, only has effect if compiled with CUDA");
+    compute_prob_opts.Register(&po);
 
     po.Read(argc, argv);
 
@@ -77,7 +80,7 @@ int main(int argc, char *argv[]) {
       exit(0);
     }
 
-    if (!examples_rspecifier.empty()) {
+    if (!examples_rspecifier.empty() && IsSimpleNnet(nnet1)) {
       std::vector<NnetExample> examples;
       SequentialNnetExampleReader example_reader(examples_rspecifier);
       for (; !example_reader.Done(); example_reader.Next())
@@ -99,8 +102,6 @@ int main(int argc, char *argv[]) {
         ScaleNnet(middle, &interp_nnet);
         AddNnet(nnet1, 1.0 - middle, &interp_nnet);
 
-        NnetComputeProbOptions compute_prob_opts;
-        compute_prob_opts.compute_deriv = true;
         NnetComputeProb prob_computer(compute_prob_opts, interp_nnet);
         std::vector<NnetExample>::const_iterator eg_iter = examples.begin(),
                                                  eg_end = examples.end();
@@ -108,6 +109,8 @@ int main(int argc, char *argv[]) {
           prob_computer.Compute(*eg_iter);
         const SimpleObjectiveInfo *objf_info = prob_computer.GetObjective("output");
         double objf_per_frame = objf_info->tot_objective / objf_info->tot_weight;
+
+        prob_computer.PrintTotalStats();
         const Nnet &nnet_gradient = prob_computer.GetDeriv();
         KALDI_LOG << "At position " << middle
                   << ", objf per frame is " << objf_per_frame;
@@ -129,6 +132,10 @@ int main(int argc, char *argv[]) {
     { // Get info about magnitude of parameter change.
       Nnet diff_nnet(nnet1);
       AddNnet(nnet2, -1.0, &diff_nnet);
+      if (GetVerboseLevel() >= 1) {
+        KALDI_VLOG(1) << "Printing info for the difference between the neural nets: "
+                      << diff_nnet.Info();
+      }
       int32 num_updatable = NumUpdatableComponents(diff_nnet);
       Vector<BaseFloat> dot_prod(num_updatable);
       ComponentDotProducts(diff_nnet, diff_nnet, &dot_prod);
@@ -136,9 +143,16 @@ int main(int argc, char *argv[]) {
       KALDI_LOG << "Parameter differences per layer are "
                 << PrintVectorPerUpdatableComponent(nnet1, dot_prod);
 
-      Vector<BaseFloat> baseline_prod(num_updatable);
+      Vector<BaseFloat> baseline_prod(num_updatable),
+          new_prod(num_updatable);
       ComponentDotProducts(nnet1, nnet1, &baseline_prod);
+      ComponentDotProducts(nnet2, nnet2, &new_prod);
       baseline_prod.ApplyPow(0.5);
+      new_prod.ApplyPow(0.5);
+
+      KALDI_LOG << "Norms of parameter matrices from <new-nnet-in> are "
+                << PrintVectorPerUpdatableComponent(nnet2, new_prod);
+
       dot_prod.DivElements(baseline_prod);
       KALDI_LOG << "Relative parameter differences per layer are "
                 << PrintVectorPerUpdatableComponent(nnet1, dot_prod);
@@ -152,5 +166,3 @@ int main(int argc, char *argv[]) {
     return -1;
   }
 }
-
-

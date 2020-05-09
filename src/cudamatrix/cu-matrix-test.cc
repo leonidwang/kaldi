@@ -3,9 +3,11 @@
 // Copyright 2010  Karel Vesely
 //           2013  Lucas Ondel
 //           2013  Johns Hopkins University (author: Daniel Povey)
-//           2013  Hainan Xu    
+//           2013  Hainan Xu
 //           2013  Xiaohui Zhang
 //           2013  Johns Hopkins University (author: Guoguo Chen)
+//           2017  Hossein Hadian
+//           2017  Shiyin Kang
 
 // See ../../COPYING for clarification regarding multiple authors
 //
@@ -39,7 +41,7 @@ namespace kaldi {
 /*
  * INITIALIZERS
  */
-template<typename Real> 
+template<typename Real>
 static void InitRand(VectorBase<Real> *v) {
   for (MatrixIndexT i = 0; i < v->Dim(); i++)
     (*v)(i) = RandGauss();
@@ -47,7 +49,7 @@ static void InitRand(VectorBase<Real> *v) {
 
 
 
-template<typename Real> 
+template<typename Real>
 static void InitRand(MatrixBase<Real> *M) {
   do {
     for (MatrixIndexT i = 0;i < M->NumRows();i++)
@@ -58,7 +60,7 @@ static void InitRand(MatrixBase<Real> *M) {
 
 
 
-template<typename Real> 
+template<typename Real>
 static void RandZeroToOneMatrix(MatrixBase<Real>* mat) {
   for(int32 r=0; r<mat->NumRows(); r++)
     for(int32 c=0; c<mat->NumCols(); c++)
@@ -70,15 +72,19 @@ static void RandZeroToOneMatrix(MatrixBase<Real>* mat) {
  * Unit tests
  */
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixTraceMatMat() {
   for (int32 i = 0; i < 2; i++) {
     int32 M = 100 + Rand() % 200, N = 100 + Rand() % 200;
     CuMatrix<Real> A(M, N);
-    A.SetRandn();
+    A.SetRandUniform();
+    // Add bias to avoid numbers close to zero
+    A.Add(0.1);
     if (i % 2 == 1) {
       CuMatrix<Real> B(M, N);
       B.SetRandn();
+      // add a bias to avoid numerical failure when comparing r2 and r3
+      B.Add(0.1);
       Real r1 = TraceMatMat(A, B, kTrans),
           r2 = TraceMatMat(Matrix<Real>(A), Matrix<Real>(B), kTrans),
           r3 = TraceMatMat(Matrix<Real>(A), Matrix<Real>(B, kTrans), kNoTrans);
@@ -102,11 +108,11 @@ static void UnitTestCuMatrixTraceMatMat() {
 }
 
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuCholesky() {
   for (int32 i = 0; i < 2; i++) {
     int32 M = 1 + Rand() % 10, N = M + 5;
-    
+
     CuMatrix<Real> A(M, N);
     A.SetRandn();
     CuMatrix<Real> S(M, M);
@@ -133,11 +139,12 @@ static void UnitTestCuCholesky() {
 /*
  * CuMatrix
  */
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixApplyLog() {
   int32 M = 100 + Rand() % 200, N = 100 + Rand() % 200;
   Matrix<Real> H(M, N);
-  H.SetRandn();
+  H.SetRandUniform(); // Using uniform distribution to ensure positive numbers
+  H.Add(0.1);         // Add bias to eliminate zeros
   H.MulElements(H); // make numbers positive
 
   CuMatrix<Real> D(H);
@@ -147,19 +154,34 @@ static void UnitTestCuMatrixApplyLog() {
 
   Matrix<Real> H2(D);
 
-  AssertEqual(H,H2);
+  KALDI_ASSERT(ApproxEqual(H,H2));
 }
 
 
 /*
  * CuMatrix
  */
-template<typename Real> 
+template<typename Real>
+static void UnitTestCuMatrixApplyExpSpecial() {
+  int32 M = 10 + Rand() % 20;
+  int32 N = 10 + Rand() % 20;
+  Matrix<Real> H(M, N);
+  H.SetRandn();
+
+  CuMatrix<Real> D(H);
+
+  D.ApplyExpSpecial();
+  H.ApplyExpSpecial();
+
+  Matrix<Real> H2(D);
+  KALDI_ASSERT(ApproxEqual(H,H2));
+}
+
+template<typename Real>
 static void UnitTestCuMatrixApplyExp() {
   int32 M = 10 + Rand() % 20, N = 10 + Rand() % 20;
   Matrix<Real> H(M, N);
   H.SetRandn();
-  H.MulElements(H); // make numbers positive
 
   CuMatrix<Real> D(H);
 
@@ -168,12 +190,32 @@ static void UnitTestCuMatrixApplyExp() {
 
   Matrix<Real> H2(D);
 
-  AssertEqual(H,H2);
+  KALDI_ASSERT(ApproxEqual(H,H2));
+}
+
+
+template<typename Real>
+static void UnitTestCuMatrixApplyExpLimited() {
+  int32 M = 10 + Rand() % 20, N = 10 + Rand() % 20;
+  Matrix<Real> H(M, N);
+  H.SetRandn();
+
+  BaseFloat lower_limit = -0.2, upper_limit = 0.2;
+
+  CuMatrix<Real> D(H);
+  D.ApplyExpLimited(lower_limit, upper_limit);
+
+  H.ApplyFloor(lower_limit);
+  H.ApplyCeiling(upper_limit);
+  H.ApplyExp();
+  Matrix<Real> H2(D);
+
+  KALDI_ASSERT(ApproxEqual(H,H2));
 }
 
 
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixSigmoid() {
   for (int32 i = 0; i < 2; i++) {
     int32 M = 100 + Rand() % 200, N = 100 + Rand() % 200;
@@ -189,11 +231,11 @@ static void UnitTestCuMatrixSigmoid() {
 
     Matrix<Real> H2(E);
 
-    AssertEqual(H, H2);
+    KALDI_ASSERT(ApproxEqual(H, H2));
   }
 }
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixScale() {
   int32 M = 100 + Rand() % 200, N = 100 + Rand() % 200;
   Matrix<Real> H(M, N);
@@ -205,10 +247,10 @@ static void UnitTestCuMatrixScale() {
   H.Scale(scale);
   Matrix<Real> E(D);
 
-  AssertEqual(H, E);
+  KALDI_ASSERT(ApproxEqual(H, E));
 }
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixAdd() {
   int32 M = 100 + Rand() % 200, N = 100 + Rand() % 200;
   Matrix<Real> H(M, N);
@@ -220,11 +262,11 @@ static void UnitTestCuMatrixAdd() {
   H.Add(offset);
   Matrix<Real> E(D);
 
-  AssertEqual(H, E);
+  KALDI_ASSERT(ApproxEqual(H, E));
 }
 
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixSoftHinge() {
   int32 M = 100 + Rand() % 200, N = 100 + Rand() % 200;
   Matrix<Real> H(M, N);
@@ -236,23 +278,24 @@ static void UnitTestCuMatrixSoftHinge() {
 
   E.SoftHinge(D);
   H.SoftHinge(H);
-  
+
   Matrix<Real> H2(E);
 
-  AssertEqual(H,H2);
+  KALDI_ASSERT(ApproxEqual(H,H2));
 }
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixGroupPnorm() {
   int32 M = 100 + Rand() % 200, N = 100 + Rand() % 200;
-  // M = 256; N = 256;
+  Real power[] = { 1.4, 1.6, 0.1234, 2.123, 0, 1, 2,
+      std::numeric_limits<Real>::infinity() };
   for (int32 K = 5; K < 7; K++) {
-    for (int32 q = 2; q < 4; q++) {
-      BaseFloat p = 1.0 + 0.2 * q;
+    for (int32 i = 0; i < 2 * sizeof(power) / sizeof(Real); ++i) {
+      Real p = power[i / 2];
       int32 N_src = N * K;
       Matrix<Real> H_src(M, N_src);
       H_src.SetRandn();
-      if (rand () % 2 == 0)
+      if (i % 2 == 0)
         H_src.ApplyFloor(0.0); // will put some zeros in the matrix.. harder to
                                // do derivatives.
       Matrix<Real> H(M, N);
@@ -261,12 +304,12 @@ static void UnitTestCuMatrixGroupPnorm() {
       CuMatrix<Real> E(M, N);
       E.GroupPnorm(D, p);
       Matrix<Real> H2(E);
-      AssertEqual(H,H2);
+      KALDI_ASSERT(ApproxEqual(H, H2));
     }
   }
 }
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixGroupMax() {
   int32 M = 100 + Rand() % 200, N = 100 + Rand() % 200;
   // M = 256; N = 256;
@@ -283,11 +326,11 @@ static void UnitTestCuMatrixGroupMax() {
     CuMatrix<Real> E(M, N);
     E.GroupMax(D);
     Matrix<Real> H2(E);
-    AssertEqual(H,H2);
+    KALDI_ASSERT(ApproxEqual(H,H2));
   }
 }
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixSet() {
   for (int32 i = 0; i < 2; i++) {
     BaseFloat value= 0.333;
@@ -297,53 +340,53 @@ static void UnitTestCuMatrixSet() {
     m1.Set(value);
     m2.Set(value);
     Matrix<Real> m3(m1);
-    AssertEqual(m2, m3);
+    KALDI_ASSERT(ApproxEqual(m2, m3));
   }
 }
 
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixApplyPow() {
 
   for (int32 i = 0; i < 2; i++) {
     BaseFloat pow = 0.5 * (Rand() % 6);
-    
+
     Matrix<Real> H(10 + Rand() % 60, 10 + Rand() % 20);
     H.SetRandn();
     H.Row(0).Set(0.0);
     if (i == 2) { Matrix<Real> tmp(H, kTrans); H = tmp; }
-    
+
     if (pow != 1.0 && pow != 2.0 && pow != 3.0)
       H.MulElements(H); //make numbers positive
-    
+
     CuMatrix<Real> cH(H);
 
     cH.ApplyPow(pow);
 
     H.ApplyPow(pow);
     Matrix<Real> H2(cH);
-    AssertEqual(H, H2);
+    KALDI_ASSERT(ApproxEqual(H, H2));
   }
 }
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixApplyPowAbs() {
 
   for (int32 i = 0; i < 2; i++) {
     BaseFloat pow = 0.5 * (Rand() % 6);
-    
+
     Matrix<Real> H(10 + Rand() % 60, 10 + Rand() % 20);
     H.SetRandn();
     H.Row(0).Set(0.0);
     if (i == 2) { Matrix<Real> tmp(H, kTrans); H = tmp; }
-    
+
     CuMatrix<Real> cH(H);
 
     cH.ApplyPowAbs(pow, true);
 
     H.ApplyPowAbs(pow, true);
     Matrix<Real> H2(cH);
-    AssertEqual(H, H2);
+    KALDI_ASSERT(ApproxEqual(H, H2));
   }
 }
 
@@ -370,7 +413,32 @@ static void UnitTestCuMatrixCopyRowsFromVec() {
     mat.CopyRowsFromVec(vec);
 
     Matrix<Real> mat2(cu_mat);
-    AssertEqual(mat, mat2);
+    KALDI_ASSERT(ApproxEqual(mat, mat2));
+  }
+}
+
+
+template<typename Real>
+static void UnitTestCuMatrixCopyColsFromVec() {
+  for (int32 p = 0; p < 2; p++) {
+    int32 num_rows = 100 + Rand() % 255;
+    int32 num_cols = 100 + Rand() % 200;
+
+    int32 vec_dim;
+    if (p % 2 == 0) vec_dim = num_rows;
+    else vec_dim = num_cols * num_rows;
+
+    CuVector<Real> cu_vec(vec_dim);
+    cu_vec.SetRandn();
+    Vector<Real> vec(cu_vec);
+
+    CuMatrix<Real> cu_mat(num_rows, num_cols);
+    cu_mat.CopyColsFromVec(cu_vec);
+    Matrix<Real> mat(num_rows, num_cols);
+    mat.CopyColsFromVec(vec);
+
+    Matrix<Real> mat2(cu_mat);
+    KALDI_ASSERT(ApproxEqual(mat, mat2));
   }
 }
 
@@ -383,7 +451,7 @@ static void UnitTestCuMatrixCopyRows() {
         num_cols = 10 + Rand() % 10;
     CuMatrix<Real> M(num_rows1, num_cols);
     M.SetRandn();
-    
+
     CuMatrix<Real> N1(num_rows2, num_cols),
         N2(num_rows2, num_cols), O(num_rows2, num_cols);
     std::vector<int32> reorder(num_rows2);
@@ -404,9 +472,9 @@ static void UnitTestCuMatrixCopyRows() {
       for (int32 j = 0; j < num_cols; j++)
         if (reorder[i] < 0) O(i, j) = 0;
         else O(i, j) = M(reorder[i], j);
-    
-    AssertEqual(N1, O);
-    AssertEqual(N2, O);
+
+    KALDI_ASSERT(ApproxEqual(N1, O));
+    KALDI_ASSERT(ApproxEqual(N2, O));
   }
 }
 
@@ -440,7 +508,7 @@ static void UnitTestCuMatrixCopyToRows() {
     CuArray<Real*> reorder_dst_cuda(reorder_dst);
     M.CopyToRows(reorder_dst_cuda);
 
-    AssertEqual(N, O);
+    KALDI_ASSERT(ApproxEqual(N, O));
   }
 }
 
@@ -452,7 +520,7 @@ static void UnitTestCuMatrixAddRows() {
         num_rows2 = 10 + Rand() % 10,
         num_cols = 10 + Rand() % 10;
     CuMatrix<Real> M(num_rows1, num_cols);
-    M.SetRandn();    
+    M.SetRandn();
 
     CuMatrix<Real> N1(num_rows2, num_cols),
         N2(num_rows2, num_cols), O(num_rows2, num_cols);
@@ -480,10 +548,46 @@ static void UnitTestCuMatrixAddRows() {
       }
     }
 
-    AssertEqual(N1, O);
-    AssertEqual(N2, O);
+    KALDI_ASSERT(ApproxEqual(N1, O));
+    KALDI_ASSERT(ApproxEqual(N2, O));
   }
 }
+
+
+template<typename Real>
+static void UnitTestCuMatrixMulRows() {
+  for (int32 p = 0; p < 2; p++) {
+    MatrixIndexT num_rows1 = 10 + Rand() % 10,
+        num_rows2 = 10 + Rand() % 10,
+        num_cols = 10 + Rand() % 10;
+    CuMatrix<Real> M(num_rows1, num_cols);
+    M.SetRandn();
+
+    CuMatrix<Real> N1(num_rows2, num_cols),
+        O(num_rows2, num_cols);
+    std::vector<int32> reorder(num_rows2);
+    std::vector<const Real*> reorder_src(num_rows2, NULL);
+    for (int32 i = 0; i < num_rows2; i++) {
+      reorder[i] = -1 + (Rand() % (num_rows1 + 1));
+      if (reorder[i] != -1)
+        reorder_src[i] = M.RowData(reorder[i]);
+    }
+
+    CuArray<int32> reorder_cuda(reorder);
+    N1.MulRows(M, reorder_cuda);
+
+    for (int32 i = 0; i < num_rows2; i++) {
+      if (reorder[i] != -1) {
+        CuSubVector<Real> O_row(O, i),
+            M_row(M, reorder[i]);
+        O_row.MulElements(M_row);
+      }
+    }
+
+    KALDI_ASSERT(ApproxEqual(N1, O));
+  }
+}
+
 
 
 template<typename Real>
@@ -498,7 +602,9 @@ static void UnitTestCuMatrixAddToRows() {
     Real alpha =
         static_cast<Real>((Rand() % num_rows2)) / static_cast<Real>(num_rows1);
 
-    CuMatrix<Real> N(num_rows2, num_cols), O(num_rows2, num_cols);
+    CuMatrix<Real> N1(num_rows2, num_cols), N2(num_rows2, num_cols),
+        O(num_rows2, num_cols);
+    std::vector<int32> reorder(num_rows1);
     std::vector<Real*> reorder_dst(num_rows1, NULL);
     unordered_map<MatrixIndexT, bool> used_index;
     for (int32 i = 0; i < num_rows1; i++) {
@@ -508,17 +614,20 @@ static void UnitTestCuMatrixAddToRows() {
       } else {
         index = -1;
       }
+      reorder[i] = index;
       if (index != -1) {
-        reorder_dst[i] = N.RowData(index);
+        reorder_dst[i] = N1.RowData(index);
         for (int32 j = 0; j < num_cols; j++)
           O(index, j) += alpha * M(i, j);
       }
     }
 
+    CuArray<int32> reorder_cuda(reorder);
     CuArray<Real*> reorder_dst_cuda(reorder_dst);
     M.AddToRows(alpha, reorder_dst_cuda);
-
-    AssertEqual(N, O);
+    M.AddToRows(alpha, reorder_cuda, &N2);
+    KALDI_ASSERT(ApproxEqual(N1, O));
+    KALDI_ASSERT(ApproxEqual(N2, O));
   }
 }
 
@@ -535,13 +644,13 @@ void UnitTestCuMatrixCopyCross() {
       mat2.CopyFromMat(mat1);
       CuMatrix<Real> mat3(M, N);
       mat3.CopyFromMat(mat2);
-      AssertEqual(mat1, mat3);
+      KALDI_ASSERT(ApproxEqual(mat1, mat3));
     } else {
       CuMatrix<float> mat2(N, M);
       mat2.CopyFromMat(mat1, kTrans);
       CuMatrix<Real> mat3(M, N);
       mat3.CopyFromMat(mat2, kTrans);
-      AssertEqual(mat1, mat3);
+      KALDI_ASSERT(ApproxEqual(mat1, mat3));
     }
   }
 }
@@ -556,7 +665,7 @@ template<typename Real> void UnitTestCuMatrixCopyCross2() {
     mat2.CopyFromMat(mat1);
     CuMatrix<Real> mat3(M, N);
     mat3.CopyFromMat(mat2);
-    AssertEqual(mat1, mat3);
+    KALDI_ASSERT(ApproxEqual(mat1, mat3));
   }
 }
 
@@ -592,10 +701,10 @@ static void UnitTestCuMatrixSumColumnRanges() {
     }
     CuMatrix<Real> cu_src(src);
     CuMatrix<Real> cu_dst(num_rows, num_cols2, kUndefined);
-    CuArray<Int32Pair> indices_tmp(indices);    
+    CuArray<Int32Pair> indices_tmp(indices);
     cu_dst.SumColumnRanges(cu_src, indices_tmp);
     Matrix<Real> dst2(cu_dst);
-    AssertEqual(dst, dst2);
+    KALDI_ASSERT(ApproxEqual(dst, dst2));
   }
 }
 
@@ -610,8 +719,8 @@ static void UnitTestCuMatrixAddRowRanges() {
     Matrix<Real> dst(num_rows2, num_cols); dst.SetRandn();
 
     // Computes the indexes.
-    std::vector<Int32Pair> indexes(num_cols);
-    for (MatrixIndexT i = 0; i < num_cols; i++) {
+    std::vector<Int32Pair> indexes(num_rows2);
+    for (MatrixIndexT i = 0; i < num_rows2; i++) {
       indexes[i].first = Rand() % num_rows1;
       int32 headroom = num_rows1 - indexes[i].first,
             size = (Rand() % headroom) + 1;
@@ -620,12 +729,11 @@ static void UnitTestCuMatrixAddRowRanges() {
                    indexes[i].second <= num_rows1 &&
                    indexes[i].first >= 0);
     }
-
     // Computes reference matrix.
     Matrix<Real> dst1(dst);
     for (MatrixIndexT i = 0; i < num_rows2; i++) {
+      int32 start = indexes[i].first, end = indexes[i].second;
       for (MatrixIndexT j = 0; j < num_cols; j++) {
-        int32 start = indexes[j].first, end = indexes[j].second;
         for (MatrixIndexT i2 = start; i2 < end; i2++)
           dst1(i, j) += src(i2, j);
       }
@@ -636,11 +744,11 @@ static void UnitTestCuMatrixAddRowRanges() {
     CuArray<Int32Pair> cu_indexes(indexes);
     cu_dst.AddRowRanges(cu_src, cu_indexes);
     Matrix<Real> dst2(cu_dst);
-    AssertEqual(dst1, dst2);
+    KALDI_ASSERT(ApproxEqual(dst1, dst2));
   }
 }
 
-  
+
 template<typename Real>
 static void UnitTestCuMatrixCopyCols() {
   for (int32 p = 0; p < 2; p++) {
@@ -649,7 +757,7 @@ static void UnitTestCuMatrixCopyCols() {
         num_rows = 10 + Rand() % 10;
     CuMatrix<Real> M(num_rows, num_cols1);
     M.SetRandn();
-    
+
     CuMatrix<Real> N(num_rows, num_cols2), O(num_rows, num_cols2);
     std::vector<int32> reorder(num_cols2);
     for (int32 i = 0; i < num_cols2; i++)
@@ -657,15 +765,122 @@ static void UnitTestCuMatrixCopyCols() {
 
     CuArray<int32> reorder_gpu(reorder);
     N.CopyCols(M, reorder_gpu);
-    
+
     for (int32 i = 0; i < num_rows; i++)
       for (int32 j = 0; j < num_cols2; j++)
         if (reorder[j] < 0) O(i, j) = 0;
         else O(i, j) = M(i, reorder[j]);
-    AssertEqual(N, O);
+    KALDI_ASSERT(ApproxEqual(N, O));
   }
 }
 
+template<typename Real>
+static void UnitTextCuMatrixAddSmat() {
+  for (int i = 0; i < 2; ++i) {
+    int rows = 10 + Rand() % 40;
+    int cols = 10 + Rand() % 50;
+    int srows = rows;
+    int scols = cols;
+
+    MatrixTransposeType trans = (i % 2 == 0) ? kNoTrans : kTrans;
+    if (trans == kTrans) {
+      std::swap(srows, scols);
+    }
+
+    Real alpha = 0.345;
+
+    Matrix<Real> mat(rows, cols);
+    mat.SetRandn();
+    CuMatrix<Real> cumat(mat);
+
+    SparseMatrix<Real> smat(srows, scols);
+    smat.SetRandn(0.5);
+    CuSparseMatrix<Real> cusmat(smat);
+
+    mat.AddSmat(alpha, smat, trans);
+    cumat.AddSmat(alpha, cusmat, trans);
+
+    Matrix<Real> mat2(cumat);
+
+    KALDI_ASSERT(ApproxEqual(mat, mat2));
+  }
+}
+
+template<typename Real>
+static void UnitTextCuMatrixAddMatSmat() {
+  for (int i = 0; i < 2; ++i) {
+    int m = 10 + Rand() % 40;
+    int k = 10 + Rand() % 60;
+    int n = 10 + Rand() % 50;
+    int srows = k;
+    int scols = n;
+
+    MatrixTransposeType trans = (i % 2 == 0) ? kNoTrans : kTrans;
+    if (trans == kTrans) {
+      std::swap(srows, scols);
+    }
+
+    Real alpha = 0.345;
+    Real beta = 0.567;
+
+    Matrix<Real> mat(m, k);
+    mat.SetRandn();
+    CuMatrix<Real> cumat(mat);
+
+    Matrix<Real> result(m, n);
+    result.SetRandn();
+    CuMatrix<Real> curesult(result);
+
+    SparseMatrix<Real> smat(srows, scols);
+    smat.SetRandn(0.8);
+    CuSparseMatrix<Real> cusmat(smat);
+
+    result.AddMatSmat(alpha, mat, smat, trans, beta);
+    curesult.AddMatSmat(alpha, cumat, cusmat, trans, beta);
+
+    Matrix<Real> result2(curesult);
+
+    KALDI_ASSERT(ApproxEqual(result, result2));
+  }
+}
+
+template<typename Real>
+static void UnitTextCuMatrixAddSmatMat() {
+  for (int i = 0; i < 2; ++i) {
+    int m = 10 + Rand() % 40;
+    int k = 10 + Rand() % 60;
+    int n = 10 + Rand() % 50;
+    int srows = m;
+    int scols = k;
+
+    MatrixTransposeType trans = (i % 2 == 0) ? kNoTrans : kTrans;
+    if (trans == kTrans) {
+      std::swap(srows, scols);
+    }
+
+    Real alpha = 0.345;
+    Real beta = 0.567;
+
+    SparseMatrix<Real> smat(srows, scols);
+    smat.SetRandn(0.8);
+    CuSparseMatrix<Real> cusmat(smat);
+
+    Matrix<Real> mat(k, n);
+    mat.SetRandn();
+    CuMatrix<Real> cumat(mat);
+
+    Matrix<Real> result(m, n);
+    result.SetRandn();
+    CuMatrix<Real> curesult(result);
+
+    result.AddSmatMat(alpha, smat, trans, mat, beta);
+    curesult.AddSmatMat(alpha, cusmat, trans, cumat, beta);
+
+    Matrix<Real> result2(curesult);
+
+    KALDI_ASSERT(ApproxEqual(result, result2));
+  }
+}
 
 template<typename Real>
 static void UnitTestCuMatrixAddCols() {
@@ -675,7 +890,7 @@ static void UnitTestCuMatrixAddCols() {
         num_rows = 10 + Rand() % 10;
     CuMatrix<Real> M(num_rows, num_cols1);
     M.SetRandn();
-    
+
     CuMatrix<Real> N(num_rows, num_cols2), O(num_rows, num_cols2);
     std::vector<int32> reorder(num_cols2);
     for (int32 i = 0; i < num_cols2; i++)
@@ -683,26 +898,26 @@ static void UnitTestCuMatrixAddCols() {
 
     CuArray<int32> reorder_gpu(reorder);
     N.AddCols(M, reorder_gpu);
-    
+
     for (int32 i = 0; i < num_rows; i++)
       for (int32 j = 0; j < num_cols2; j++)
         if (reorder[j] < 0) O(i, j) = 0;
         else O(i, j) = M(i, reorder[j]);
-    AssertEqual(N, O);
+    KALDI_ASSERT(ApproxEqual(N, O));
   }
 }
 
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixApplyFloor() {
 
   for (int32 i = 0; i < 3; i++) {
     BaseFloat floor = 0.33 * (Rand() % 6);
-    
+
     Matrix<Real> H(10 + Rand() % 600, 10 + Rand() % 20);
     H.SetRandn();
     if (i == 2) { Matrix<Real> tmp(H, kTrans); H = tmp; }
-    
+
     CuMatrix<Real> cH(H);
 
     cH.ApplyFloor(floor);
@@ -710,13 +925,13 @@ static void UnitTestCuMatrixApplyFloor() {
     H.ApplyFloor(floor);
     Matrix<Real> H2(cH);
 
-    AssertEqual(H, H2);
+    KALDI_ASSERT(ApproxEqual(H, H2));
   }
 }
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixApplyCeiling() {
-	
+
   for (int32 i = 0; i < 3; i++) {
     BaseFloat ceiling = 0.33 * (Rand() % 6);
 
@@ -727,15 +942,15 @@ static void UnitTestCuMatrixApplyCeiling() {
     CuMatrix<Real> cH(H);
 
     cH.ApplyCeiling(ceiling);
-    
+
     H.ApplyCeiling(ceiling);
     Matrix<Real> H2(cH);
 
-    AssertEqual(H, H2);
+    KALDI_ASSERT(ApproxEqual(H, H2));
   }
-} 
- 
-template<typename Real> 
+}
+
+template<typename Real>
 static void UnitTestCuMatrixApplyHeaviside() {
 
   for (int32 i = 0; i < 1; i++) {
@@ -750,16 +965,35 @@ static void UnitTestCuMatrixApplyHeaviside() {
     cH.ApplyHeaviside();
     H.ApplyHeaviside();
     Matrix<Real> H2(cH);
-    AssertEqual(H, H2);
+    KALDI_ASSERT(ApproxEqual(H, H2));
   }
 }
 
 
-template<typename Real> 
+template<typename Real>
+static void UnitTestCuMatrixHeaviside() {
+
+  for (int32 i = 0; i < 1; i++) {
+    Matrix<Real> H(10 + Rand() % 60, 10 + Rand() % 20);
+    H.SetRandn();
+    H.Row(0).Set(0.0);
+    if (i == 2) { Matrix<Real> tmp(H, kTrans); H = tmp; }
+
+    CuMatrix<Real> cH(H);
+    CuMatrix<Real> cH2(H.NumRows(), H.NumCols(), kUndefined);
+    cH2.Heaviside(cH);
+    H.ApplyHeaviside();
+    Matrix<Real> H2(cH2);
+    KALDI_ASSERT(ApproxEqual(H, H2));
+  }
+}
+
+
+template<typename Real>
 static void UnitTestCuMatrixMulElements() {
   for (int32 i = 0; i < 2; i++) {
     MatrixIndexT dimM = 100 + Rand() % 256, dimN = 100 + Rand() % 256;
-  
+
     Matrix<Real> Ha(dimM, dimN);
     Matrix<Real> Hb(dimM, dimN);
     Ha.SetRandn();
@@ -776,19 +1010,21 @@ static void UnitTestCuMatrixMulElements() {
     Matrix<Real> Ha2(dimM, dimN);
     Da.CopyToMat(&Ha2);
 
-    AssertEqual(Ha,Ha2);
+    KALDI_ASSERT(ApproxEqual(Ha,Ha2));
   }
 }
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixDivElements() {
   for (int32 i = 0; i < 2; i++) {
     MatrixIndexT dimM = 100 + Rand() % 256, dimN = 100 + Rand() % 256;
-  
+
     Matrix<Real> Ha(dimM, dimN);
     Matrix<Real> Hb(dimM, dimN);
     Ha.SetRandn();
-    Hb.SetRandn();
+
+    Hb.SetRandUniform();  // Use uniform distirbution t ensure positive numbers
+    Hb.Add(0.1);          // Add bias to ensure we do not divide by zero
 
     CuMatrix<Real> Da(dimM, dimN);
     CuMatrix<Real> Db(dimM, dimN);
@@ -801,12 +1037,34 @@ static void UnitTestCuMatrixDivElements() {
     Matrix<Real> Ha2(dimM, dimN);
     Da.CopyToMat(&Ha2);
 
-    AssertEqual(Ha,Ha2);
+    KALDI_ASSERT(ApproxEqual(Ha,Ha2));
   }
 }
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixMax() {
+  Matrix<Real> Ha(100,100);
+  Matrix<Real> Hb(100,100);
+  Ha.SetRandn();
+  Hb.SetRandn();
+
+  CuMatrix<Real> Da(100,100);
+  CuMatrix<Real> Db(100,100);
+  
+  Da.CopyFromMat(Ha);
+  Db.CopyFromMat(Hb);
+
+  Da.Max(Db);
+  Ha.Max(Hb);
+
+  Matrix<Real> Ha2(100,100);
+  Da.CopyToMat(&Ha2);
+
+  KALDI_ASSERT(ApproxEqual(Ha,Ha2));
+}
+
+template<typename Real>
+static void UnitTestCuMatrixMin() {
   Matrix<Real> Ha(100,100);
   Matrix<Real> Hb(100,100);
   Ha.SetRandn();
@@ -817,18 +1075,18 @@ static void UnitTestCuMatrixMax() {
   Da.CopyFromMat(Ha);
   Db.CopyFromMat(Hb);
 
-  Da.Max(Db);
-  Ha.Max(Hb);
+  Da.Min(Db);
+  Ha.Min(Hb);
 
   Matrix<Real> Ha2(100,100);
   Da.CopyToMat(&Ha2);
 
-  AssertEqual(Ha,Ha2);
+  KALDI_ASSERT(ApproxEqual(Ha, Ha2));
 }
 
 
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixMulColsVec() {
   Matrix<Real> Hm(100,99);
   Vector<Real> Hv(99);
@@ -846,12 +1104,12 @@ static void UnitTestCuMatrixMulColsVec() {
   Matrix<Real> Hm2(100,99);
   Dm.CopyToMat(&Hm2);
 
-  AssertEqual(Hm,Hm2);
+  KALDI_ASSERT(ApproxEqual(Hm,Hm2));
 }
 
 
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixMulRowsVec() {
   for (int32 i = 0; i < 2; i++) {
     int32 dimM = 100 + Rand() % 200, dimN = 100 + Rand() % 200;
@@ -865,18 +1123,18 @@ static void UnitTestCuMatrixMulRowsVec() {
     CuVector<Real> Dv(dimM);
     Dm.CopyFromMat(Hm);
     Dv.CopyFromVec(Hv);
-    
+
     Dm.MulRowsVec(Dv);
     Hm.MulRowsVec(Hv);
-    
+
     Matrix<Real> Hm2(dimM, dimN);
     Dm.CopyToMat(&Hm2);
 
-    AssertEqual(Hm,Hm2);
+    KALDI_ASSERT(ApproxEqual(Hm,Hm2));
   }
 }
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixMulRowsGroupMat() {
   for (int32 i = 0; i < 2; i++) {
     int32 dimM = 100 + Rand() % 200, dimNs = 100 + Rand() % 200;
@@ -892,51 +1150,57 @@ static void UnitTestCuMatrixMulRowsGroupMat() {
     CuMatrix<Real> Ds(dimM, dimNs);
     Dm.CopyFromMat(Hm);
     Ds.CopyFromMat(Hs);
-    
+
     Dm.MulRowsGroupMat(Ds);
     Hm.MulRowsGroupMat(Hs);
-    
+
     Matrix<Real> Hm2(dimM, dimN);
     Dm.CopyToMat(&Hm2);
-    AssertEqual(Hm,Hm2);
+    KALDI_ASSERT(ApproxEqual(Hm,Hm2));
   }
 }
 
-template<typename Real> 
-static void UnitTestCuMatrixGroupPnormDeriv() {
-  int32 dimM = 100 + Rand() % 200, dimNs = 100 + Rand() % 200;
-  int32 group_size = 1 + Rand() % 10;
-  BaseFloat power = 1.1 + 0.1 * (Rand() % 10);
-  // int32 dimM = 256, dimNs = 2;
-  // int32 group_size = 2;
-  int32 dimN = group_size * dimNs;
-  Matrix<Real> Hm(dimM, dimN);
-  Matrix<Real> Hr(dimM, dimN);
-  Matrix<Real> Hs(dimM, dimNs);
-  Hs.SetRandn();
-  if (rand () % 2 == 0)
-    Hm.ApplyFloor(0.0); // will put some zeros in the matrix.. harder to
-                        // do derivatives.
-  Hs.GroupPnorm(Hm, power);
-  
-  CuMatrix<Real> Dm(dimM, dimN);
-  CuMatrix<Real> Dr(dimM, dimN);
-  CuMatrix<Real> Ds(dimM, dimNs);
-  Dm.CopyFromMat(Hm);
-  Dr.CopyFromMat(Hr);
-  Ds.CopyFromMat(Hs);
-  
-  // KALDI_LOG << "Hr " << Hr << " Dr " << Dr << "Ds" << Ds << " Hs " << Hs ; 
-  Dr.GroupPnormDeriv(Dm, Ds, power);
-  Hr.GroupPnormDeriv(Hm, Hs, power);
-  
-  // KALDI_LOG << "Hr " << Hr << " Dr " << Dr << "Ds" << Ds << " Hs " << Hs ; 
-  Matrix<Real> Hr2(dimM, dimN);
-  Dr.CopyToMat(&Hr2);
-  AssertEqual(Hr,Hr2);
+template<typename Real>
+static void UnitTestCuMatrixDiffGroupPnorm() {
+  Real p[] = { 1.234, 2.345, 1, 2, std::numeric_limits<Real>::infinity() };
+  for (int i = 0; i < 2 * sizeof(p) / sizeof(Real); i++) {
+    int32 dimM = 100 + Rand() % 200, dimNs = 100 + Rand() % 200;
+    int32 group_size = 1 + Rand() % 10;
+    BaseFloat power = p[i / 2];
+    int32 dimN = group_size * dimNs;
+    Matrix<Real> Hiv(dimM, dimN);
+    Matrix<Real> Hov(dimM, dimNs);
+    Matrix<Real> Hid(dimM, dimN);
+    Matrix<Real> Hod(dimM, dimNs);
+    Hiv.SetRandn();
+    Hod.SetRandn();
+    if (i % 2 == 0)
+      Hiv.ApplyFloor(0.0); // will put some zeros in the matrix.. harder to
+                           // do derivatives.
+    Hov.GroupPnorm(Hiv, power);
+    CuMatrix<Real> Div(dimM, dimN);
+    CuMatrix<Real> Dov(dimM, dimNs);
+    CuMatrix<Real> Did(dimM, dimN);
+    CuMatrix<Real> Dod(dimM, dimNs);
+    Div.CopyFromMat(Hiv);
+    Dod.CopyFromMat(Hod);
+    Dov.CopyFromMat(Hov);
+
+    // GPU
+    Did.DiffGroupPnorm(Div, Dov, Dod, power);
+
+    // CPU
+    Hid.GroupPnormDeriv(Hiv, Hov, power);
+    Hid.MulRowsGroupMat(Hod);
+
+    Matrix<Real> Hid2(dimM, dimN);
+    Did.CopyToMat(&Hid2);
+    KALDI_ASSERT(ApproxEqual(Hid, Hid2));
+  }
 }
 
-template<typename Real> 
+
+template<typename Real>
 static void UnitTestCuMatrixGroupMaxDeriv() {
   int32 dimM = 100 + Rand() % 200, dimNs = 100 + Rand() % 200;
   int32 group_size = 1 + Rand() % 10;
@@ -951,22 +1215,22 @@ static void UnitTestCuMatrixGroupMaxDeriv() {
     Hm.ApplyFloor(0.0); // will put some zeros in the matrix.. harder to
                         // do derivatives.
   Hs.GroupMax(Hm);
-  
+
   CuMatrix<Real> Dm(dimM, dimN);
   CuMatrix<Real> Dr(dimM, dimN);
   CuMatrix<Real> Ds(dimM, dimNs);
   Dm.CopyFromMat(Hm);
   Dr.CopyFromMat(Hr);
   Ds.CopyFromMat(Hs);
-  
-  // KALDI_LOG << "Hr " << Hr << " Dr " << Dr << "Ds" << Ds << " Hs " << Hs ; 
+
+  // KALDI_LOG << "Hr " << Hr << " Dr " << Dr << "Ds" << Ds << " Hs " << Hs ;
   Dr.GroupMaxDeriv(Dm, Ds);
   Hr.GroupMaxDeriv(Hm, Hs);
-  
-  // KALDI_LOG << "Hr " << Hr << " Dr " << Dr << "Ds" << Ds << " Hs " << Hs ; 
+
+  // KALDI_LOG << "Hr " << Hr << " Dr " << Dr << "Ds" << Ds << " Hs " << Hs ;
   Matrix<Real> Hr2(dimM, dimN);
   Dr.CopyToMat(&Hr2);
-  AssertEqual(Hr,Hr2);
+  KALDI_ASSERT(ApproxEqual(Hr,Hr2));
 }
 
 template<typename Real> static void UnitTestCuMatrixAddDiagVecMat() {
@@ -983,7 +1247,7 @@ template<typename Real> static void UnitTestCuMatrixAddDiagVecMat() {
 
     KALDI_ASSERT(M.Sum() != 0.0);
     KALDI_ASSERT(N.Sum() != 0.0);
-    
+
     CuVector<Real> V(dimM);
     V.SetRandn();
 
@@ -999,9 +1263,9 @@ template<typename Real> static void UnitTestCuMatrixAddDiagVecMat() {
       Mcheckrow.Scale(beta);
       Mcheckrow.AddVec(alpha * V(r), Nrow);
     }
-    
+
     M.AddDiagVecMat(alpha, V, N, trans, beta);
-    AssertEqual(M, Mcheck);
+    KALDI_ASSERT(ApproxEqual(M, Mcheck));
     KALDI_ASSERT(M.Sum() != 0.0);
   }
 }
@@ -1013,8 +1277,8 @@ template<typename Real> static void UnitTestCuMatrixAddMatDiagVec() {
     Real alpha = 0.43243, beta = 1.423;
 
     CuMatrix<Real> M(dimM, dimN), N(dimM, dimN), buf(dimM, dimN);
-    M.SetRandn(); 
-    N.SetRandn(); 
+    M.SetRandn();
+    N.SetRandn();
     buf.CopyFromMat(N);
     MatrixTransposeType trans = (p % 2 == 0 ? kNoTrans : kTrans);
     if (trans == kTrans)
@@ -1023,13 +1287,13 @@ template<typename Real> static void UnitTestCuMatrixAddMatDiagVec() {
     CuVector<Real> V(dimN);
     V.SetRandn();
 
-    CuMatrix<Real> Mcheck(M); 
+    CuMatrix<Real> Mcheck(M);
     Mcheck.Scale(beta);
-    buf.MulColsVec(V);  
+    buf.MulColsVec(V);
     Mcheck.AddMat(alpha, buf, kNoTrans);
 
     M.AddMatDiagVec(alpha, N, trans, V, beta);
-    AssertEqual(M, Mcheck);
+    KALDI_ASSERT(ApproxEqual(M, Mcheck));
     KALDI_ASSERT(M.Sum() != 0.0);
   }
 }
@@ -1048,19 +1312,42 @@ template<typename Real> static void UnitTestCuMatrixAddMatMatElements() {
   Mcheck.Scale(beta); Mcheck.AddMat(alpha, buf, kNoTrans);
 
   M.AddMatMatElements(alpha, A, B, beta);
-  AssertEqual(M, Mcheck);
+  KALDI_ASSERT(ApproxEqual(M, Mcheck));
   KALDI_ASSERT(M.Sum() != 0.0);
 }
 
-template<typename Real> 
+template<typename Real> static void UnitTestCuMatrixSetMatMatDivMat() {
+  // M = a * b / c (by element; when c = 0, M = a)
+  MatrixIndexT dimM = 100 + Rand() % 255, dimN = 100 + Rand() % 255;
+  CuMatrix<Real> M(dimM, dimN), A(dimM, dimN), B(dimM, dimN), C(dimM, dimN);
+  CuMatrix<Real> ref(dimM, dimN);
+  M.SetRandn();
+  A.SetRandn();
+  B.SetRandn();
+  C.SetRandn();
+
+  C.ApplyFloor(0.01);  // make sure there are no zeros.
+
+  M.SetMatMatDivMat(A,B,C);
+  ref.AddMatMatElements(1.0, A, B, 0.0);
+  ref.DivElements(C);
+  KALDI_ASSERT(ApproxEqual(M, ref));
+
+  C.SetZero();
+  M.SetMatMatDivMat(A,B,C);
+  KALDI_ASSERT(ApproxEqual(M, A));
+}
+
+template<typename Real>
 static void UnitTestCuMatrixDivRowsVec() {
-  Matrix<Real> Hm(100,99);
-  Vector<Real> Hv(100);
+  MatrixIndexT dimM = 1000, dimN = 5;
+  Matrix<Real> Hm(dimM, dimN);
+  Vector<Real> Hv(dimM);
   Hm.SetRandn();
   InitRand(&Hv);
 
-  CuMatrix<Real> Dm(100,99);
-  CuVector<Real> Dv(100);
+  CuMatrix<Real> Dm(dimM, dimN);
+  CuVector<Real> Dv(dimM);
   Dm.CopyFromMat(Hm);
   Dv.CopyFromVec(Hv);
 
@@ -1068,15 +1355,15 @@ static void UnitTestCuMatrixDivRowsVec() {
   Hv.InvertElements();
   Hm.MulRowsVec(Hv);
 
-  Matrix<Real> Hm2(100,99);
+  Matrix<Real> Hm2(dimM, dimN);
   Dm.CopyToMat(&Hm2);
 
-  AssertEqual(Hm,Hm2);
+  KALDI_ASSERT(ApproxEqual(Hm, Hm2));
 }
 
 
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixAddMat() {
   Matrix<Real> Ha(100,100);
   Matrix<Real> Hb(100,100);
@@ -1094,16 +1381,16 @@ static void UnitTestCuMatrixAddMat() {
   Matrix<Real> Ha2(100,100);
   Da.CopyToMat(&Ha2);
 
-  AssertEqual(Ha,Ha2);
-  
+  KALDI_ASSERT(ApproxEqual(Ha,Ha2));
+
   //check use with submatrix
   CuMatrix<Real> mat1(10,10,kSetZero);
   mat1.AddMat(1.0,Da.Range(5,10,12,10)); //different stride for mat1,mat2
   CuMatrix<Real> mat2(Da.Range(5,10,12,10));
-  AssertEqual(mat1,mat2);
- 
+  KALDI_ASSERT(ApproxEqual(mat1,mat2));
+
   for (int i = 0; i < 10; i++) {
-    int32 N = 5 * (10 + Rand() % 10),  M = 100 + Rand() % 50;  
+    int32 N = 5 * (10 + Rand() % 10),  M = 100 + Rand() % 50;
     Matrix<Real> Hc(N,M);
     Matrix<Real> Hd(M,N);
     Hc.SetRandn();
@@ -1113,59 +1400,115 @@ static void UnitTestCuMatrixAddMat() {
     CuMatrix<Real> Dd(M,N);
     Dc.CopyFromMat(Hc);
     Dd.CopyFromMat(Hd);
-  
+
     Real alpha = 0.5;
     Dc.AddMat(alpha,Dd,kTrans);
     Hc.AddMat(alpha,Hd,kTrans);
-  
+
     Matrix<Real> Hc2(N,M);
     Dc.CopyToMat(&Hc2);
-    AssertEqual(Hc,Hc2);
+    KALDI_ASSERT(ApproxEqual(Hc,Hc2));
 
     // check use with submatrix
     CuMatrix<Real> mat3(N/5,M,kSetZero);
     mat3.AddMat(1.0, Dd.Range(0,M,0,N/5),kTrans);
-    
+
     CuMatrix<Real> mat4(Dd.Range(0,M,0,N/5),kTrans);
-    AssertEqual(mat3,mat4);
+    KALDI_ASSERT(ApproxEqual(mat3,mat4));
   }
 }
 
-template<typename Real> 
-static void UnitTestCuMatrixAddMatBlocks() {
-  int32 num_row_blocks = 10, num_col_blocks = 20;
-  Matrix<Real> Ha1(100, 100), Ha2(100, 100);
-  Matrix<Real> Hb(100 * num_row_blocks, 100 * num_col_blocks);
-  Ha1.SetRandn();
-  Ha2.SetRandn();
-  Hb.SetRandn();
 
-  CuMatrix<Real> Da1(100, 100), Da2(100, 100);
-  CuMatrix<Real> Db(100 * num_row_blocks, 100 * num_col_blocks);
-  Da1.CopyFromMat(Ha1);
-  Da2.CopyFromMat(Ha2);
-  Db.CopyFromMat(Hb);
+// this tests the branch of AddMatBlocks() that is taken when
+// 'this' has a smaller dimension than 'src' (it sums).
+template<typename Real>
+static void UnitTestCuMatrixAddMatBlocks1() {
+  for (int32 l = 0; l < 5; l++) {
+    int32 num_row_blocks = RandInt(1, 10), num_col_blocks = RandInt(1, 20);
+    int32 block_rows = RandInt(1, 100), block_cols = RandInt(1, 100);
+    BaseFloat alpha = RandInt(3, 10);
+    CuMatrix<Real> dst(block_rows, block_cols);
+    dst.SetRandn();
+    CuMatrix<Real> src(num_row_blocks * block_rows,
+                       num_col_blocks * block_cols);
+    src.SetRandn();
 
-  for (int32 i = 0; i < num_row_blocks; i++) {
-    for (int32 j = 0; j < num_col_blocks; j++) {
-      SubMatrix<Real> Hs(Hb.Range(i * 100, 100, j * 100, 100));
-      Ha1.AddMat(0.5, Hs, kNoTrans);
-      Ha2.AddMat(0.5, Hs, kTrans);
+    CuMatrix<Real> dst_copy(dst);
+    for (int32 rb = 0; rb < num_row_blocks; rb++) {
+      for (int32 cb = 0; cb < num_col_blocks; cb++) {
+        CuSubMatrix<Real> src_part(src,
+                                   rb * block_rows, block_rows,
+                                   cb * block_cols, block_cols);
+        dst_copy.AddMat(alpha, src_part);
+      }
     }
+    dst.AddMatBlocks(alpha, src);
+    KALDI_ASSERT(ApproxEqual(dst, dst_copy));
   }
-
-  Da1.AddMatBlocks(0.5, Db, kNoTrans);
-  Da2.AddMatBlocks(0.5, Db, kTrans);
-  Matrix<Real> Ha11(100, 100);
-  Da1.CopyToMat(&Ha11);
-  AssertEqual(Ha1,Ha11);
-  Matrix<Real> Ha22(100, 100);
-  Da2.CopyToMat(&Ha22);
-  AssertEqual(Ha2,Ha22);
 }
 
-template<typename Real> 
-static void UnitTestCuMatrixSum() {
+// this is as UnitTestCuMatrixAddMatBlocks1, but tests with transpose.
+template<typename Real>
+static void UnitTestCuMatrixAddMatBlocks1Trans() {
+  for (int32 l = 0; l < 5; l++) {
+    int32 num_row_blocks = RandInt(1, 10), num_col_blocks = RandInt(1, 20);
+    int32 block_rows = RandInt(1, 100), block_cols = RandInt(1, 100);
+    BaseFloat alpha = RandInt(3, 10);
+    CuMatrix<Real> dst(block_cols, block_rows);
+    dst.SetRandn();
+    CuMatrix<Real> src(num_row_blocks * block_rows,
+                       num_col_blocks * block_cols);
+    src.SetRandn();
+
+    CuMatrix<Real> dst_copy(dst);
+    for (int32 rb = 0; rb < num_row_blocks; rb++) {
+      for (int32 cb = 0; cb < num_col_blocks; cb++) {
+        CuSubMatrix<Real> src_part(src,
+                                   rb * block_rows, block_rows,
+                                   cb * block_cols, block_cols);
+        dst_copy.AddMat(alpha, src_part, kTrans);
+      }
+    }
+    dst.AddMatBlocks(alpha, src, kTrans);
+    KALDI_ASSERT(ApproxEqual(dst, dst_copy));
+  }
+}
+
+
+// this tests the branch of AddMatBlocks() that is taken when
+// 'this' has a larger dimension than 'src'.  In this case, it does
+// a broadcasting rather than a summing operation.
+template<typename Real>
+static void UnitTestCuMatrixAddMatBlocks2() {
+  for (int32 l = 0; l < 5; l++) {
+    int32 num_row_blocks = RandInt(1, 10), num_col_blocks = RandInt(1, 20);
+    int32 block_rows = RandInt(1, 100), block_cols = RandInt(1, 100);
+    BaseFloat alpha = RandInt(3, 10);
+    CuMatrix<Real> src(block_rows, block_cols);
+    src.SetRandn();
+    CuMatrix<Real> dst(num_row_blocks * block_rows,
+                       num_col_blocks * block_cols);
+    src.SetRandn();
+
+    CuMatrix<Real> dst_copy(dst);
+    for (int32 rb = 0; rb < num_row_blocks; rb++) {
+      for (int32 cb = 0; cb < num_col_blocks; cb++) {
+        CuSubMatrix<Real> dst_copy_part(dst_copy,
+                                        rb * block_rows, block_rows,
+                                        cb * block_cols, block_cols);
+        dst_copy_part.AddMat(alpha, src);
+      }
+    }
+    dst.AddMatBlocks(alpha, src);
+    KALDI_ASSERT(ApproxEqual(dst, dst_copy));
+  }
+}
+
+
+
+
+template<typename Real>
+static void UnitTestCuMatrixReduceSum() {
   int32 M = 100 + Rand() % 300, N = 100 + Rand() % 300;
   CuMatrix<Real> A(M, N);
   A.SetRandn();
@@ -1173,8 +1516,25 @@ static void UnitTestCuMatrixSum() {
   KALDI_ASSERT(ApproxEqual(mA.Sum(), A.Sum()));
 }
 
+template<typename Real>
+static void UnitTestCuMatrixReduceMax() {
+  int32 M = 100 + Rand() % 300, N = 100 + Rand() % 300;
+  CuMatrix<Real> A(M, N);
+  A.SetRandn();
+  Matrix<Real> mA(A);
+  KALDI_ASSERT(ApproxEqual(mA.Max(), A.Max()));
+}
 
-template<typename Real> 
+template<typename Real>
+static void UnitTestCuMatrixReduceMin() {
+  int32 M = 100 + Rand() % 300, N = 100 + Rand() % 300;
+  CuMatrix<Real> A(M, N);
+  A.SetRandn();
+  Matrix<Real> mA(A);
+  KALDI_ASSERT(ApproxEqual(mA.Min(), A.Min()));
+}
+
+template<typename Real>
 static void UnitTestCuMatrixAddVecToCols() {
   Matrix<Real> Hm(100,99);
   Vector<Real> Hv(100);
@@ -1192,12 +1552,12 @@ static void UnitTestCuMatrixAddVecToCols() {
   Matrix<Real> Hm2(100,99);
   Dm.CopyToMat(&Hm2);
 
-  AssertEqual(Hm,Hm2);
+  KALDI_ASSERT(ApproxEqual(Hm,Hm2));
 }
 
 
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixAddVecToRows() {
   Matrix<Real> Hm(100,99);
   Vector<Real> Hv(99);
@@ -1215,11 +1575,11 @@ static void UnitTestCuMatrixAddVecToRows() {
   Matrix<Real> Hm2(100,99);
   Dm.CopyToMat(&Hm2);
 
-  AssertEqual(Hm,Hm2);
+  KALDI_ASSERT(ApproxEqual(Hm,Hm2));
 }
 
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixSymAddMat2() {
   for (int32 i = 0; i < 2; i++) {
     int32 dimM = 10 + Rand() % 200, dimN = 10 + Rand() % 30;
@@ -1242,14 +1602,14 @@ static void UnitTestCuMatrixSymAddMat2() {
 
     CuTpMatrix<Real> T1(M), T2(M2);
     CuMatrix<Real> X1(T1), X2(T2); // so we can test equality.
-    AssertEqual(X1, X2);
+    KALDI_ASSERT(ApproxEqual(X1, X2));
     KALDI_ASSERT(dimM == 0 || X1.Trace() != 0);
   }
 }
 
 
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixSymInvertPosDef() {
   for (int32 i = 0; i < 2; i++) {
     int32 dimM = 10 + Rand() % 200, dimN = dimM + 20;
@@ -1296,7 +1656,7 @@ static void UnitTestCuMatrixSymInvertPosDef() {
 }
 
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixAddMatMat() {
   Matrix<Real> Ha(200,100);
   Matrix<Real> Hb(100,200);
@@ -1322,19 +1682,47 @@ static void UnitTestCuMatrixAddMatMat() {
   Dc1.CopyToMat(&Hc1a);
   Dc2.CopyToMat(&Hc2a);
 
-  AssertEqual(Hc1,Hc1a);
-  AssertEqual(Hc2,Hc2a);
+  KALDI_ASSERT(ApproxEqual(Hc1,Hc1a));
+  KALDI_ASSERT(ApproxEqual(Hc2,Hc2a));
+}
+
+
+template<typename Real>
+static void UnitTestCuMatrixAddVecVec() {
+  Vector<Real> x(100);
+  Vector<Real> y(200);
+  x.SetRandn();
+  y.SetRandn();
+
+  CuVector<Real> Cux(100);
+  CuVector<Real> Cuy(200);
+  Cux.CopyFromVec(x);
+  Cuy.CopyFromVec(y);
+
+  Matrix<Real> A(100,200);
+  CuMatrix<Real> CuA(100,200);
+
+  A.AddVecVec(0.5f, x, y);
+  CuA.AddVecVec(0.5f, Cux, Cuy);
+  Matrix<Real> A2(100, 200);
+  CuA.CopyToMat(&A2);
+
+  KALDI_ASSERT(ApproxEqual(A,A2));
 }
 
 
 template<typename Real>
 static void UnitTestCuMatrixAddMatMatBatched() {
+  // Random stride is disabled as AddMatMatBatched requires consistent stride
+#if HAVE_CUDA == 1
+  bool old_mode = CuDevice::Instantiate().SetDebugStrideMode(false);
+#endif
   const int32 batchCount = 10;
   std::vector<Matrix<Real>* > Ha(batchCount), Hb(batchCount), Hc1(batchCount), Hc2(batchCount);
   std::vector<CuMatrix<Real>* > Da(batchCount), Db(batchCount), Dc1(batchCount), Dc2(batchCount);
   std::vector<SubMatrix<Real>* > HA, HB, HC1, HC2;
   std::vector<CuSubMatrix<Real>* > DA, DB, DC1, DC2;
-  
+
   for (int32 i = 0; i < batchCount; i++) {
     // first create a Matrix intance and then creat a SubMatrix instance from that
     Ha[i] = new Matrix<Real>(200, 100);
@@ -1343,14 +1731,14 @@ static void UnitTestCuMatrixAddMatMatBatched() {
     Hc2[i] = new Matrix<Real>(100, 100);
     Ha[i]->SetRandn();
     Hb[i]->SetRandn();
-    HA.push_back(new SubMatrix<Real>(*(Ha[i]), 0, Ha[i]->NumRows(), 0, 
-			    Ha[i]->NumCols()));
-    HB.push_back(new SubMatrix<Real>(*(Hb[i]), 0, Hb[i]->NumRows(), 0, 
-			    Hb[i]->NumCols()));
-    HC1.push_back(new SubMatrix<Real>(*(Hc1[i]), 0, Hc1[i]->NumRows(), 0, 
-			    Hc1[i]->NumCols()));
-    HC2.push_back(new SubMatrix<Real>(*(Hc2[i]), 0, Hc2[i]->NumRows(), 0, 
-			    Hc2[i]->NumCols()));
+    HA.push_back(new SubMatrix<Real>(*(Ha[i]), 0, Ha[i]->NumRows(), 0,
+                                     Ha[i]->NumCols()));
+    HB.push_back(new SubMatrix<Real>(*(Hb[i]), 0, Hb[i]->NumRows(), 0,
+                                     Hb[i]->NumCols()));
+    HC1.push_back(new SubMatrix<Real>(*(Hc1[i]), 0, Hc1[i]->NumRows(), 0,
+                                      Hc1[i]->NumCols()));
+    HC2.push_back(new SubMatrix<Real>(*(Hc2[i]), 0, Hc2[i]->NumRows(), 0,
+                                      Hc2[i]->NumCols()));
 
     // first create a CuMatrix intance and then creat a CuSubMatrix instance from that
     Da[i] = new CuMatrix<Real>(200, 100);
@@ -1359,20 +1747,20 @@ static void UnitTestCuMatrixAddMatMatBatched() {
     Dc2[i] = new CuMatrix<Real>(100, 100);
     Da[i]->CopyFromMat(*(Ha[i]));
     Db[i]->CopyFromMat(*(Hb[i]));
-    DA.push_back(new CuSubMatrix<Real>(*(Da[i]), 0, Da[i]->NumRows(), 0, 
-			    Da[i]->NumCols()));
-    DB.push_back(new CuSubMatrix<Real>(*(Db[i]), 0, Db[i]->NumRows(), 0, 
-			    Db[i]->NumCols()));
-    DC1.push_back(new CuSubMatrix<Real>(*(Dc1[i]), 0, Dc1[i]->NumRows(), 0, 
-			    Dc1[i]->NumCols()));
-    DC2.push_back(new CuSubMatrix<Real>(*(Dc2[i]), 0, Dc2[i]->NumRows(), 0, 
-			    Dc2[i]->NumCols()));
+    DA.push_back(new CuSubMatrix<Real>(*(Da[i]), 0, Da[i]->NumRows(), 0,
+                                       Da[i]->NumCols()));
+    DB.push_back(new CuSubMatrix<Real>(*(Db[i]), 0, Db[i]->NumRows(), 0,
+                                       Db[i]->NumCols()));
+    DC1.push_back(new CuSubMatrix<Real>(*(Dc1[i]), 0, Dc1[i]->NumRows(), 0,
+                                        Dc1[i]->NumCols()));
+    DC2.push_back(new CuSubMatrix<Real>(*(Dc2[i]), 0, Dc2[i]->NumRows(), 0,
+                                        Dc2[i]->NumCols()));
   }
 
-  AddMatMatBatched(static_cast<Real>(0.5f), DC1, DA, kNoTrans, DB, kNoTrans, 
-		  static_cast<Real>(0.0f));
-  AddMatMatBatched(static_cast<Real>(0.5f), DC2, DA, kTrans, DB, kTrans, 
-		  static_cast<Real>(0.0f));
+  AddMatMatBatched(static_cast<Real>(0.5f), DC1, DA, kNoTrans, DB, kNoTrans,
+                   static_cast<Real>(0.0f));
+  AddMatMatBatched(static_cast<Real>(0.5f), DC2, DA, kTrans, DB, kTrans,
+                   static_cast<Real>(0.0f));
 
   // used to store results from DC1 and DC2 for equality check
   Matrix<Real> Hca1(200,200);
@@ -1384,17 +1772,20 @@ static void UnitTestCuMatrixAddMatMatBatched() {
     (*HC2[i]).AddMatMat(0.5f, *(HA[i]), kTrans, *(HB[i]), kTrans, 0.0f);
     DC1[i]->CopyToMat(&Hca1);
     DC2[i]->CopyToMat(&Hca2);
-    AssertEqual(*(HC1[i]), Hca1);
-    AssertEqual(*(HC2[i]), Hca2);
+    KALDI_ASSERT(ApproxEqual(*(HC1[i]), Hca1));
+    KALDI_ASSERT(ApproxEqual(*(HC2[i]), Hca2));
     delete Ha[i]; delete Hb[i]; delete Hc1[i]; delete Hc2[i];
     delete HA[i]; delete HB[i]; delete HC1[i]; delete HC2[i];
     delete Da[i]; delete Db[i]; delete Dc1[i]; delete Dc2[i];
     delete DA[i]; delete DB[i]; delete DC1[i]; delete DC2[i];
   }
+#if HAVE_CUDA == 1
+  CuDevice::Instantiate().SetDebugStrideMode(old_mode);
+#endif
 }
 
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixAddToDiag() {
   for (int32 i = 0; i < 10; i++) {
     int32 dimM = 100 + Rand() % 200, dimN = 100 + Rand() % 200;
@@ -1404,11 +1795,11 @@ static void UnitTestCuMatrixAddToDiag() {
     M.AddToDiag(alpha);
     Mc.AddToDiag(alpha);
     Matrix<Real> M2(Mc);
-    AssertEqual(M, M2);
+    KALDI_ASSERT(ApproxEqual(M, M2));
   }
 }
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixAdd2() {
   for (int32 i = 0; i < 10; i++) {
     int32 dimM = 100 + Rand() % 200, dimN = 100 + Rand() % 200;
@@ -1418,7 +1809,7 @@ static void UnitTestCuMatrixAdd2() {
     M.Add(alpha);
     Mc.Add(alpha);
     Matrix<Real> M2(Mc);
-    AssertEqual(M, M2);
+    KALDI_ASSERT(ApproxEqual(M, M2));
   }
 }
 
@@ -1427,14 +1818,14 @@ template<typename Real>
 static void UnitTestCuMatrixCopyFromMat() {
   for (int32 i = 1; i < 10; i++) {
     MatrixIndexT dim = 5 * i + Rand() % 10;
-    
+
     Matrix<Real> A(dim, dim);
     A.SetRandn();
-    CuMatrix<Real> E(A);    
+    CuMatrix<Real> E(A);
     CuMatrix<Real> B(dim, dim);
     B.CopyFromMat(E);
 
-    AssertEqual<Real>(B, E);
+    KALDI_ASSERT(ApproxEqual<Real>(B, E));
   }
 }
 
@@ -1450,7 +1841,7 @@ static void UnitTestCuMatrixCopyFromTp() {
     B.CopyFromTp(A, kNoTrans);
     C.CopyFromTp(E, kNoTrans);
     CuMatrix<Real> D(B);
-    AssertEqual<Real>(D, C);
+    KALDI_ASSERT(ApproxEqual<Real>(D, C));
   }
 }
 
@@ -1458,7 +1849,7 @@ template<typename Real>
 static void UnitTestCuMatrixAddMatTp() {
   for (int32 i = 1; i < 10; i++) {
     MatrixIndexT dim = 5 * i + Rand() % 10;
-    
+
     Matrix<Real> A(dim, dim);
     Matrix<Real> B(dim, dim);
     TpMatrix<Real> C(dim);
@@ -1468,28 +1859,31 @@ static void UnitTestCuMatrixAddMatTp() {
     CuMatrix<Real> D(A);
     CuMatrix<Real> E(B);
     CuTpMatrix<Real> F(C);
-    
+
     A.AddMatTp(1.0, B, kNoTrans, C, kNoTrans, 1.0);
     D.AddMatTp(1.0, E, kNoTrans, F, kNoTrans, 1.0);
 
     CuMatrix<Real> G(A);
-    AssertEqual<Real>(G, D);
+    KALDI_ASSERT(ApproxEqual<Real>(G, D));
   }
 }
 
 
 template<typename Real>
 static void UnitTestCuMatrixTranspose() {
-  for (int32 i = 1; i < 10; i++) {
+  for (int32 i = 1; i < 2; i++) {
     MatrixIndexT dimM = 5 * i + Rand() % 10,
         dimN = dimM;
     if (i % 2 == 0) dimN += 5;
-    
+
     CuMatrix<Real> A(dimM, dimN);
     A.SetRandn();
     CuMatrix<Real> B(A, kTrans);
-    A.Transpose();
-    AssertEqual(A, B);
+
+    Matrix<Real> hA(A);
+    Matrix<Real> hB(B);
+    hB.Transpose();
+    KALDI_ASSERT(ApproxEqual(hA, hB));
   }
 }
 
@@ -1497,7 +1891,7 @@ template<typename Real>
 static void UnitTestCuMatrixAddTpMat() {
   for (int32 i = 1; i < 10; i++) {
     MatrixIndexT dim = 5 * i + Rand() % 10;
-    
+
     Matrix<Real> A(dim, dim);
     Matrix<Real> B(dim, dim);
     TpMatrix<Real> C(dim);
@@ -1507,19 +1901,19 @@ static void UnitTestCuMatrixAddTpMat() {
     CuMatrix<Real> D(A);
     CuMatrix<Real> E(B);
     CuTpMatrix<Real> F(C);
-    
+
     A.AddTpMat(1.0, C, kNoTrans, B, kNoTrans, 1.0);
     D.AddTpMat(1.0, F, kNoTrans, E, kNoTrans, 1.0);
 
     CuMatrix<Real> G(A);
-    AssertEqual<Real>(G, D);
+    KALDI_ASSERT(ApproxEqual<Real>(G, D));
   }
 }
 
 /*
  * CuVector unit tests
  */
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuVectorAddVec() {
   Vector<Real> Hv(777);
   Vector<Real> Hw(777);
@@ -1537,13 +1931,13 @@ static void UnitTestCuVectorAddVec() {
 
   Vector<Real> Hv2(777);
   Dv.CopyToVec(&Hv2);
-  
-  AssertEqual(Hv,Hv2);
+
+  KALDI_ASSERT(ApproxEqual(Hv,Hv2));
 }
 
 
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuVectorAddRowSumMat() {
  const int32 X=4321, Y=19;
   Real alpha=0.1, beta=0.7;
@@ -1560,7 +1954,7 @@ static void UnitTestCuVectorAddRowSumMat() {
   Dv.CopyFromVec(Hv);
 
   Dv.AddRowSumMat(alpha,Dm,beta);
-  
+
   Hv_accu.SetZero();
   Hv_accu.AddRowSumMat(1.0, Hm);
   Hv.Scale(beta);
@@ -1569,12 +1963,12 @@ static void UnitTestCuVectorAddRowSumMat() {
   Vector<Real> Hv2(Y);
   Dv.CopyToVec(&Hv2);
 
-  AssertEqual(Hv,Hv2);
+  KALDI_ASSERT(ApproxEqual(Hv,Hv2));
 }
 
 
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuVectorAddRowSumMatLarge() {
   Matrix<Real> Hm(1000,990);
   Vector<Real> Hv(990);
@@ -1588,7 +1982,7 @@ static void UnitTestCuVectorAddRowSumMatLarge() {
   Dv.CopyFromVec(Hv);
 
   Dv.AddRowSumMat(0.5,Dm,0.7);
-  
+
   Hv_accu.SetZero();
   Hv_accu.AddRowSumMat(1.0, Hm);
   Hv.Scale(0.7);
@@ -1597,12 +1991,12 @@ static void UnitTestCuVectorAddRowSumMatLarge() {
   Vector<Real> Hv2(990);
   Dv.CopyToVec(&Hv2);
 
-  AssertEqual(Hv,Hv2);
+  KALDI_ASSERT(ApproxEqual(Hv,Hv2));
 }
 
 
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuVectorAddColSumMat() {
   const int32 X=19, Y=4321;
   Real alpha=0.5, beta=0.7;
@@ -1619,7 +2013,7 @@ static void UnitTestCuVectorAddColSumMat() {
   Dv.CopyFromVec(Hv);
 
   Dv.AddColSumMat(alpha,Dm,beta);
-  
+
   Hv_accu.SetZero();
   Hv_accu.AddColSumMat(1.0, Hm);
   Hv.Scale(beta);
@@ -1628,10 +2022,10 @@ static void UnitTestCuVectorAddColSumMat() {
   Vector<Real> Hv2(X);
   Dv.CopyToVec(&Hv2);
 
-  AssertEqual(Hv,Hv2);
+  KALDI_ASSERT(ApproxEqual(Hv,Hv2));
 }
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuSubMatrix() {
   for (int32 iter = 0 ; iter < 10; iter++) {
     int32 M1 = 1 + rand () % 10, M2 = 1 + Rand() % 1, M3 = 1 + Rand() % 10, M = M1 + M2 + M3,
@@ -1650,7 +2044,7 @@ static void UnitTestCuSubMatrix() {
 
 
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuVectorAddColSumMatLarge() {
   Matrix<Real> Hm(1000,990);
   Vector<Real> Hv(1000);
@@ -1664,7 +2058,7 @@ static void UnitTestCuVectorAddColSumMatLarge() {
   Dv.CopyFromVec(Hv);
 
   Dv.AddColSumMat(0.5, Dm, 0.7);
-  
+
   Hv_accu.SetZero();
   Hv_accu.AddColSumMat(1.0, Hm);
   Hv.Scale(0.7);
@@ -1673,12 +2067,12 @@ static void UnitTestCuVectorAddColSumMatLarge() {
   Vector<Real> Hv2(1000);
   Dv.CopyToVec(&Hv2);
 
-  AssertEqual(Hv,Hv2);
+  KALDI_ASSERT(ApproxEqual(Hv,Hv2));
 }
 
 
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuVectorInvertElements() {
   Vector<Real> Hv(777);
   InitRand(&Hv);
@@ -1691,11 +2085,11 @@ static void UnitTestCuVectorInvertElements() {
 
   Vector<Real> Hv2(777);
   Dv.CopyToVec(&Hv2);
-  
-  AssertEqual(Hv,Hv2);
+
+  KALDI_ASSERT(ApproxEqual(Hv,Hv2));
 }
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixInvertElements() {
   Matrix<Real> Hm(77, 77);
   InitRand(&Hm);
@@ -1708,8 +2102,8 @@ static void UnitTestCuMatrixInvertElements() {
 
   Matrix<Real> Hm2(77, 77);
   Dm.CopyToMat(&Hm2);
-  
-  AssertEqual(Hm,Hm2);
+
+  KALDI_ASSERT(ApproxEqual(Hm,Hm2));
 }
 
 
@@ -1728,7 +2122,7 @@ static void UnitTestCuMatrixIO() {
     CuMatrix<Real> mat2;
     std::istringstream is(os.str());
     mat2.Read(is, binary);
-    AssertEqual(mat, mat2);
+    KALDI_ASSERT(ApproxEqual(mat, mat2));
   }
 }
 
@@ -1756,10 +2150,10 @@ static void UnitTestCuVectorAddTpVec() {
   Vector<Real> Hv2(300);
   Dv.CopyToVec(&Hv2);
 
-  AssertEqual(Hv,Hv2);
+  KALDI_ASSERT(ApproxEqual(Hv,Hv2));
 }
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuApproxEqual() {
   Real tol = 0.1;
   for (int32 i = 0; i < 2; i++) {
@@ -1775,7 +2169,7 @@ static void UnitTestCuApproxEqual() {
   }
 }
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuVectorMulTp() {
   Vector<Real> Hv(300);
   InitRand(&Hv);
@@ -1794,10 +2188,10 @@ static void UnitTestCuVectorMulTp() {
   Vector<Real> Hv2(300);
   Dv.CopyToVec(&Hv2);
 
-  AssertEqual(Hv,Hv2);
+  KALDI_ASSERT(ApproxEqual(Hv,Hv2));
 }
 
-template<typename Real, typename OtherReal> 
+template<typename Real, typename OtherReal>
 static void UnitTestCuCopy() {
   for (int32 i = 0; i < 10; i++) {
     int32 M = 1 + Rand() % 10, N = 1 + Rand() % 10;
@@ -1820,13 +2214,13 @@ static void UnitTestCuCopy() {
     CuMatrix<Real> J(I, kTrans);
     Matrix<OtherReal> K(J, kTrans);
     CuMatrix<Real> L(K, kNoTrans);
-    
+
     KALDI_ASSERT(A.ApproxEqual(L));
   }
 
 }
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuSigmoid() {
   Matrix<Real> Hi(100,111);
   Matrix<Real> Ho(100,111);
@@ -1848,12 +2242,12 @@ static void UnitTestCuSigmoid() {
   Matrix<Real> Ho2(100,111);
   Do.CopyToMat(&Ho2);
 
-  AssertEqual(Ho,Ho2);
+  KALDI_ASSERT(ApproxEqual(Ho,Ho2));
 }
 
 
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuDiffSigmoid() {
   Matrix<Real> Hi(100,111);
   Matrix<Real> Ho(100,111);
@@ -1879,15 +2273,103 @@ static void UnitTestCuDiffSigmoid() {
   Matrix<Real> Ho2(100,111);
   Do.CopyToMat(&Ho2);
 
-  AssertEqual(Ho,Ho2);
+  KALDI_ASSERT(ApproxEqual(Ho,Ho2));
 }
 
 
+template<typename Real>
+static void UnitTestCuDiffSoftmax() {
+  for (int32 i = 0; i < 4; i++) {
+    int m = RandInt(10, 280), n = RandInt(10, 280);
+    Matrix<Real> Hi(m, n);
+    Matrix<Real> Ho(m, n);
+    Matrix<Real> Hy(m, n);
+    Hi.SetRandn();
+    RandZeroToOneMatrix(&Hy);
 
-template<typename Real> 
+    CuMatrix<Real> Di(m, n);
+    CuMatrix<Real> Do(m, n);
+    CuMatrix<Real> Dy(m, n);
+    Di.CopyFromMat(Hi);
+    Dy.CopyFromMat(Hy);
+
+    //gpu
+    if (i % 2 == 0) {
+      Do.DiffSoftmaxPerRow(Dy, Di);
+    } else {
+      // in-place.
+      Do.CopyFromMat(Di);
+      Do.DiffSoftmaxPerRow(Dy, Do);
+    }
+    //cpu
+    {
+      const MatrixBase<Real> &P(Hy), &E(Hi);
+      MatrixBase<Real> &D(Ho);
+      D.CopyFromMat(P);
+      D.MulElements(E);
+      // At this point, D = P .* E (in matlab notation)
+      Vector<Real> pe_vec(D.NumRows()); // For each row i, the dot product (p_t . e_t).
+      pe_vec.AddDiagMatMat(1.0, P, kNoTrans, E, kTrans, 0.0);
+      D.AddDiagVecMat(-1.0, pe_vec, P, kNoTrans, 1.0); // does D -= diag(pe_vec) * P.
+    }
+
+    Matrix<Real> Ho2(m, n);
+    Do.CopyToMat(&Ho2);
+
+    KALDI_ASSERT(ApproxEqual(Ho, Ho2));
+  }
+}
+
+
+template<typename Real>
+static void UnitTestCuDiffLogSoftmax() {
+  for (int32 i = 0; i < 4; i++) {
+    int m = RandInt(10, 280), n = RandInt(10, 280);
+    Matrix<Real> Hi(m, n);
+    Matrix<Real> Ho(m, n);
+    Matrix<Real> Hy(m, n);
+    Hi.SetRandn();
+    RandZeroToOneMatrix(&Hy);
+
+    CuMatrix<Real> Di(m, n);
+    CuMatrix<Real> Do(m, n);
+    CuMatrix<Real> Dy(m, n);
+    Di.CopyFromMat(Hi);
+    Dy.CopyFromMat(Hy);
+
+    //gpu
+    if (i % 2 == 0) {
+      Do.DiffLogSoftmaxPerRow(Dy, Di);
+    } else {
+      // in-place.
+      Do.CopyFromMat(Di);
+      Do.DiffLogSoftmaxPerRow(Dy, Do);
+    }
+    //cpu
+    {
+      const MatrixBase<Real> &Y(Hy), &E(Hi);
+      MatrixBase<Real> &D(Ho);
+      D.CopyFromMat(Y);
+      D.ApplyExp();                           // exp(y)
+      Vector<Real> E_sum(D.NumRows());        // Initializes to zero
+      E_sum.AddColSumMat(1.0, E);             // Sum(e)
+      D.MulRowsVec(E_sum);                    // exp(y) Sum(e)
+      D.Scale(-1.0);                          // - exp(y) Sum(e)
+      D.AddMat(1.0, E, kNoTrans);             // e - exp(y_i) Sum(e)
+    }
+
+    Matrix<Real> Ho2(m, n);
+    Do.CopyToMat(&Ho2);
+
+    KALDI_ASSERT(ApproxEqual(Ho, Ho2));
+ }
+}
+
+
+template<typename Real>
 static void UnitTestCuSoftmax() {
 
-  for (int32 i = 0; i < 2; i++) {
+  for (int32 i = 0; i < 4; i++) {
     int row = 10 + Rand() % 40;
     int col = 10 + Rand() % 50;
 
@@ -1895,13 +2377,19 @@ static void UnitTestCuSoftmax() {
     Matrix<Real> Ho(row,col);
     Hi.SetRandn();
     Hi.Scale(5.0);
-  
+
     CuMatrix<Real> Di(row, col);
     CuMatrix<Real> Do(row, col);
     Di.CopyFromMat(Hi);
 
     //gpu
-    Do.ApplySoftMaxPerRow(Di);
+    if (i % 2 == 0) {
+      Do.SoftMaxPerRow(Di);
+    } else {
+      // in-place
+      Do.CopyFromMat(Di);
+      Do.SoftMaxPerRow(Do);
+    }
     //cpu
     Ho.CopyFromMat(Hi);
     for(MatrixIndexT r=0; r<Ho.NumRows(); r++) {
@@ -1910,29 +2398,35 @@ static void UnitTestCuSoftmax() {
 
     Matrix<Real> Ho2(Do);
 
-    AssertEqual(Ho,Ho2,0.00001);
+    KALDI_ASSERT(ApproxEqual(Ho,Ho2,(Real)0.00001));
   }
 }
 
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuLogSoftmax() {
 
-  for (int32 i = 0; i < 2; i++) {
-    int row = 10 + Rand() % 40;
-    int col = 10 + Rand() % 50;
+  for (int32 i = 0; i < 50; i++) {
+    int row = 10 + Rand() % 300;
+    int col = 10 + Rand() % 300;
 
     Matrix<Real> Hi(row, col);
     Matrix<Real> Ho(row, col);
     Hi.SetRandn();
     Hi.Scale(5.0);
-  
+
     CuMatrix<Real> Di(row, col);
     CuMatrix<Real> Do(row, col);
     Di.CopyFromMat(Hi);
 
     //gpu
-    Do.ApplyLogSoftMaxPerRow(Di);
+    if (i % 2 == 0) {
+      Do.LogSoftMaxPerRow(Di);
+    } else {
+      // in-place.
+      Do.CopyFromMat(Di);
+      Do.LogSoftMaxPerRow(Do);
+    }
     //cpu
     Ho.CopyFromMat(Hi);
     for(MatrixIndexT r=0; r<Ho.NumRows(); r++) {
@@ -1941,12 +2435,12 @@ static void UnitTestCuLogSoftmax() {
 
     Matrix<Real> Ho2(Do);
 
-    AssertEqual(Ho, Ho2, 0.00001);
+    KALDI_ASSERT(ApproxEqual(Ho, Ho2, (Real)0.00001));
   }
 }
 
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuFindRowMaxId() {
   for (int32 i = 0; i < 2; i++) {
     int32 dimM = 100 + Rand() % 200, dimN = 100 + Rand() % 200;
@@ -1974,13 +2468,18 @@ static void UnitTestCuFindRowMaxId() {
     std::vector<int32> Hmax2(dimM);
     Dmax.CopyToVec(&Hmax2);
 
-    KALDI_ASSERT(Hmax == Hmax2);
+    // If the same value were generated randomly we can get to a case
+    // where the GPU and CPU return different columns.  Both would be correct.
+    // Thus check that the max for each row is the same and not the index.
+    for (MatrixIndexT r=0; r<Hi.NumRows(); r++) {
+      KALDI_ASSERT(Hi(r, Hmax[r]) == Di(r, Hmax2[r]));
+    }
   }
 }
 
 
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuDiffXent() {
   int32 X=100, Y=111;
   //nnet output / diff
@@ -1998,7 +2497,7 @@ static void UnitTestCuDiffXent() {
   //logpost vector
   Vector<Real> Hlogpost(X);
   CuVector<Real> Dlogpost(X);
-  
+
   //gpu
   Di.DiffXent(Dtgt, &Dlogpost);
   //cpu
@@ -2013,8 +2512,8 @@ static void UnitTestCuDiffXent() {
   Vector<Real> Hlogpost2(X);
   Dlogpost.CopyToVec(&Hlogpost2);
 
-  AssertEqual(Hi,Hi2);
-  AssertEqual(Hlogpost,Hlogpost2);
+  KALDI_ASSERT(ApproxEqual(Hi,Hi2));
+  KALDI_ASSERT(ApproxEqual(Hlogpost,Hlogpost2));
 }
 
 template<typename Real> void UnitTestCheck() {
@@ -2026,7 +2525,7 @@ template<typename Real> void UnitTestCheck() {
 
   CuMatrix<Real> Dj(Di);
   KALDI_LOG << Dj.NumRows();
- 
+
 
 }
 
@@ -2047,8 +2546,8 @@ void UnitTestSwapCu2Cu() {
   Di.CopyToMat(&Hf);
   Matrix<Real> Hf2(Di2.NumRows(), Di2.NumCols());
   Di2.CopyToMat(&Hf2);
-  AssertEqual(Hi,Hf2);
-  AssertEqual(Hi2,Hf);
+  KALDI_ASSERT(ApproxEqual(Hi,Hf2));
+  KALDI_ASSERT(ApproxEqual(Hi2,Hf));
 }
 
 template<typename Real>
@@ -2066,8 +2565,8 @@ void UnitTestSwapCu2M() {
   Di.Swap(&Hi2);
   Matrix<Real> Hf(Di.NumRows(), Di.NumCols());
   Di.CopyToMat(&Hf);
-  AssertEqual(Di2,Hf);
-  AssertEqual(Hi2,Hi);
+  KALDI_ASSERT(ApproxEqual(Di2,Hf));
+  KALDI_ASSERT(ApproxEqual(Hi2,Hi));
 }
 
 
@@ -2077,7 +2576,7 @@ void UnitTestCuTanh() {
   H.SetRandn();
   CuMatrix<Real> D(100,110);
   D.CopyFromMat(H);
-  
+
   //gpu
   CuMatrix<Real> Di(100,110);
   Di.Tanh(D);
@@ -2087,10 +2586,10 @@ void UnitTestCuTanh() {
   //cpu
   Matrix<Real> Hf(H.NumRows(), H.NumCols());
   Hf.Tanh(H);
-  AssertEqual(Df,Hf);
+  KALDI_ASSERT(ApproxEqual(Df,Hf));
 }
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuDiffTanh() {
   Matrix<Real> Hi(100,111);
   Matrix<Real> Ho(100,111);
@@ -2116,7 +2615,7 @@ static void UnitTestCuDiffTanh() {
   Matrix<Real> Ho2(100,111);
   Do.CopyToMat(&Ho2);
 
-  AssertEqual(Ho,Ho2);
+  KALDI_ASSERT(ApproxEqual(Ho,Ho2));
 }
 
 // just need this for testing function below.  Compute n!!
@@ -2127,16 +2626,20 @@ static int32 DoubleFactorial(int32 i) {
 template <typename Real>
 static void UnitTestCuMatrixSetRandn() {
 
-  { // First test consistency when called twice.
+
+  if (false) {
+    // This block tests consistency when called twice.
+    // It has been disabled since we added multi-threaded testing,
+    // since consistency wouldn't be expected if other threads were running.
     int32 dimM = 100 + Rand() % 200, dimN = 100 + Rand() % 200;
     Matrix<Real> M(dimM, dimN), N(dimM, dimN);
     srand(104);
     M.SetRandn();
     srand(104);
     N.SetRandn();
-    AssertEqual(M, N);
+    KALDI_ASSERT(ApproxEqual(M, N));
   }
-    
+
   for (int32 i = 0; i < 5; i++) {
     MatrixIndexT rows = 100 + Rand() % 50, cols = 100 + Rand() % 50;
     CuMatrix<Real> M(rows, cols);
@@ -2151,10 +2654,13 @@ static void UnitTestCuMatrixSetRandn() {
       // see http://en.wikipedia.org/wiki/Normal_distribution#Moments,
       // note that mu = 0 and sigma = 1.
       Real expected_moment = (pow % 2 == 1 ? 0 : DoubleFactorial(pow - 1));
+      Real expected_twice_moment = DoubleFactorial(2 * pow - 1);
       Real k = 10.0; // This is just a constant we use to give us some wiggle
                      // room before rejecting the distribution... e.g. 20 sigma,
                      // quite approximately.
-      Real allowed_deviation = k * pow / sqrt(static_cast<Real>(rows * cols));
+      // VAR(X) = E(X^2) - (E(X))^2
+      Real deviation = sqrt(expected_twice_moment - expected_moment * expected_moment);
+      Real allowed_deviation = k * deviation / sqrt(static_cast<Real>(rows * cols));
       // give it a bit more wiggle room for higher powers.. this is quite
       // unscientific, it would be better to involve the absolute moments or
       // something like that, and use one of those statistical inequalities,
@@ -2238,7 +2744,7 @@ static void UnitTestCuMatrixSetZeroAboveDiag() {
     Matrix<Real> A_orig(A);
     A.SetZeroAboveDiag();
     Matrix<Real> A_copy(A);
-        
+
     for (int32 i = 0; i < dim;  i++) {
       for (int32 j = 0; j < dim; j++) {
         Real aval = A_copy(i, j), aorigval = A_orig(i, j);
@@ -2271,14 +2777,14 @@ static void UnitTestCuMatrixCopyUpperToLower() {
 }
 
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixObjfDeriv() {
   int32 n_r = 100 + Rand() % 200, n_c = 20 + Rand() % 30;
   CuMatrix<Real> A(n_r, n_c), B(n_r, n_c);
   B.SetRandn();
   B.Add(1.0);
   B.ApplyFloor(1.0e-10);
-  
+
   std::vector<MatrixElement<Real> > labels;
   for(int i = 0; i < n_r; i++) {
     for(int j = 0; j < n_c; j++) {
@@ -2296,11 +2802,11 @@ static void UnitTestCuMatrixObjfDeriv() {
 
   // (sv_labels, logprobs, &tot_objf, &tot_weight)
   C.CompObjfAndDeriv(labels, B, &a, &b);
-  
+
   KALDI_ASSERT(ApproxEqual(b, A.Sum()));
 
   Real sum2;  // sum(i, j) A(i, j) log(B(i, j));
-  { 
+  {
     CuMatrix<Real> Bcopy(B);
     Bcopy.ApplyLog();
     sum2 = TraceMatMat(Bcopy, A, kTrans);
@@ -2312,7 +2818,7 @@ static void UnitTestCuMatrixObjfDeriv() {
   KALDI_ASSERT(ApproxEqual(A, C));
 }
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixAddElements() {
   for (int32 i = 0; i < 2; i++) {
     int32 dimM = 100 + Rand() % 50, dimN = 100 + Rand() % 50;
@@ -2323,33 +2829,63 @@ static void UnitTestCuMatrixAddElements() {
     CuMatrix<Real> M(H);
     int32 num_elements = 100 + Rand() % 10;
     std::vector<MatrixElement<Real> > input;
-    std::vector<Int32Pair> input_index;
+    std::set<Int32Pair> input_index;      //Set used to ensure unique elements
+    std::vector<Int32Pair> input_index_v;
     Real *input_value = new Real[num_elements];
     BaseFloat scale = -1 + (0.33 * (Rand() % 5));
     for (int32 j = 0; j < num_elements; j++) {
-      MatrixIndexT r = Rand() % dimM;
-      MatrixIndexT c = Rand() % dimN;
       Int32Pair tmp_pair;
-      tmp_pair.first = r;
-      tmp_pair.second = c;
+      // Generate a unique random index
+      do {
+        tmp_pair.first = Rand() % dimM;
+        tmp_pair.second = Rand() % dimN;
+      } while (input_index.find(tmp_pair)!=input_index.end());
+      input_index.insert(tmp_pair);  
+
+      MatrixIndexT r = tmp_pair.first;
+      MatrixIndexT c = tmp_pair.second;
+      input_index_v.push_back(tmp_pair);
+
       Real offset = -1 + (0.33 * (Rand() % 5));
       M(r, c) += scale * offset;
       MatrixElement<Real> t = {r, c, offset};
       input.push_back(t);
-      input_index.push_back(tmp_pair);
       input_value[j] = offset;
     }
+    
     H.AddElements(scale, input);
-    CuArray<Int32Pair> cu_input_index(input_index);
+    CuArray<Int32Pair> cu_input_index(input_index_v);
     H_copy.AddElements(scale, cu_input_index, input_value);
     delete[] input_value;
 
-    AssertEqual(H, M);
-    AssertEqual(H_copy, M);
+    KALDI_ASSERT(ApproxEqual(H, M));
+    KALDI_ASSERT(ApproxEqual(H_copy, M));
   }
 }
 
-template<typename Real> 
+template<typename Real>
+static void UnitTestCuMatrixAddToElements() {
+  for (int32 i = 0; i < 2; i++) {
+    int32 NR = 100 + Rand() % 50, NC = 100 + Rand() % 50;
+    CuMatrix<Real> A(NR, NC);
+    A.SetRandn();
+    CuMatrix<Real> A_copy(A);
+    std::vector<int32> elements(NR, -1);
+    BaseFloat alpha = -1 + (0.33 * (Rand() % 5));
+    for (int32 r = 0; r < NR; r++) {
+      MatrixIndexT c = Rand() % NC;
+      if (WithProb(0.6)) {
+        elements[r] = c;
+        A(r, c) += alpha;
+      }
+    }
+    CuArray<int32> cu_elements(elements);
+    A_copy.AddToElements(alpha, cu_elements);
+    KALDI_ASSERT(ApproxEqual(A_copy, A));
+  }
+}
+
+template<typename Real>
 static void UnitTestCuMatrixLookup() {
   for (int32 i = 0; i < 2; i++) {
     int32 dimM = 100 + Rand() % 200, dimN = 100 + Rand() % 200;
@@ -2380,7 +2916,7 @@ static void UnitTestCuMatrixLookup() {
   }
 }
 
-template<typename Real> 
+template<typename Real>
 static void UnitTestCuMatrixEqualElementMask() {
   CuMatrix<Real> m1(10,9), m2(10,9);
   CuMatrix<Real> mask_same, mask_different;
@@ -2403,6 +2939,11 @@ static void UnitTestCuMatrixEqualElementMask() {
 }
 
 template<typename Real> void CudaMatrixUnitTest() {
+  UnitTestCuMatrixApplyExpSpecial<Real>();
+  UnitTestCuMatrixApplyExpLimited<Real>();
+  UnitTextCuMatrixAddSmatMat<Real>();
+  UnitTextCuMatrixAddMatSmat<Real>();
+  UnitTextCuMatrixAddSmat<Real>();
   UnitTestCuMatrixTraceMatMat<Real>();
   UnitTestCuMatrixObjfDeriv<Real>();
   //test CuMatrix<Real> methods by cross-check with Matrix
@@ -2415,25 +2956,32 @@ template<typename Real> void CudaMatrixUnitTest() {
   UnitTestCuMatrixScale<Real>();
   UnitTestCuMatrixSigmoid<Real>();
   UnitTestCuMatrixSoftHinge<Real>();
-  UnitTestCuMatrixApplyPow<Real>(); 
-  UnitTestCuMatrixApplyPowAbs<Real>(); 
+  UnitTestCuMatrixApplyPow<Real>();
+  UnitTestCuMatrixApplyPowAbs<Real>();
   UnitTestCuMatrixSet<Real>();
   UnitTestCuMatrixAdd<Real>();
   UnitTestCuMatrixApplyFloor<Real>();
   UnitTestCuMatrixApplyCeiling<Real>();
   UnitTestCuMatrixApplyHeaviside<Real>();
+  UnitTestCuMatrixHeaviside<Real>();
   UnitTestCuMatrixMulElements<Real>();
   UnitTestCuMatrixDivElements<Real>();
   UnitTestCuMatrixMax<Real>();
+  UnitTestCuMatrixMin<Real>();
   UnitTestCuMatrixMulColsVec<Real>();
   UnitTestCuMatrixMulRowsVec<Real>();
   UnitTestCuMatrixDivRowsVec<Real>();
   UnitTestCuMatrixAddMat<Real>();
-  UnitTestCuMatrixAddMatBlocks<Real>();
-  UnitTestCuMatrixSum<Real>();
+  UnitTestCuMatrixAddMatBlocks1<Real>();
+  UnitTestCuMatrixAddMatBlocks1Trans<Real>();
+  UnitTestCuMatrixAddMatBlocks2<Real>();
+  UnitTestCuMatrixReduceSum<Real>();
+  UnitTestCuMatrixReduceMax<Real>();
+  UnitTestCuMatrixReduceMin<Real>();
   UnitTestCuMatrixAddVecToCols<Real>();
   UnitTestCuMatrixAddVecToRows<Real>();
   UnitTestCuMatrixAddMatMat<Real>();
+  UnitTestCuMatrixAddVecVec<Real>();
   UnitTestCuMatrixSymAddMat2<Real>();
   UnitTestCuMatrixAddMatMatBatched<Real>();
   UnitTestCuMatrixSymInvertPosDef<Real>();
@@ -2445,8 +2993,10 @@ template<typename Real> void CudaMatrixUnitTest() {
   UnitTestCuMatrixSumColumnRanges<Real>();
   UnitTestCuMatrixCopyRows<Real>();
   UnitTestCuMatrixCopyRowsFromVec<Real>();
+  UnitTestCuMatrixCopyColsFromVec<Real>();
   UnitTestCuMatrixCopyToRows<Real>();
   UnitTestCuMatrixAddRows<Real>();
+  UnitTestCuMatrixMulRows<Real>();
   UnitTestCuMatrixAddToRows<Real>();
   UnitTestCuMatrixAddRowRanges<Real>();
   UnitTestCuMatrixAddTpMat<Real>();
@@ -2455,8 +3005,9 @@ template<typename Real> void CudaMatrixUnitTest() {
   UnitTestCuMatrixCopyLowerToUpper<Real>();
   UnitTestCuMatrixSetZeroAboveDiag<Real>();
   UnitTestCuMatrixAddElements<Real>();
+  UnitTestCuMatrixAddToElements<Real>();
   UnitTestCuMatrixLookup<Real>();
-  UnitTestCuMatrixEqualElementMask<Real>(); 
+  UnitTestCuMatrixEqualElementMask<Real>();
   // test CuVector<Real> methods
   UnitTestCuVectorAddVec<Real>();
   UnitTestCuVectorAddRowSumMat<Real>();
@@ -2469,17 +3020,19 @@ template<typename Real> void CudaMatrixUnitTest() {
   UnitTestCuMatrixIO<Real>();
   UnitTestCuSigmoid<Real>();
   UnitTestCuApproxEqual<Real>();
-  UnitTestCuCopy<Real, float>(); 
-#if HAVE_CUDA == 1  
+  UnitTestCuCopy<Real, float>();
+#if HAVE_CUDA == 1
   if (CuDevice::Instantiate().DoublePrecisionSupported())
 #endif
     UnitTestCuCopy<Real, double>();
   UnitTestCuMatrixAddToDiag<Real>();
   UnitTestCuMatrixAdd2<Real>();
   UnitTestCuDiffSigmoid<Real>();
-  UnitTestCuMatrixGroupPnorm<Real>();  
-  UnitTestCuMatrixGroupPnormDeriv<Real>();
-  UnitTestCuMatrixGroupMax<Real>();  
+  UnitTestCuDiffSoftmax<Real>();
+  UnitTestCuDiffLogSoftmax<Real>();
+  UnitTestCuMatrixGroupPnorm<Real>();
+  UnitTestCuMatrixDiffGroupPnorm<Real>();
+  UnitTestCuMatrixGroupMax<Real>();
   UnitTestCuMatrixGroupMaxDeriv<Real>();
   UnitTestCuMatrixMulRowsVec<Real>();
   UnitTestCuMatrixMulRowsGroupMat<Real>();
@@ -2493,6 +3046,7 @@ template<typename Real> void CudaMatrixUnitTest() {
   UnitTestCuMatrixAddDiagVecMat<Real>();
   UnitTestCuMatrixAddMatDiagVec<Real>();
   UnitTestCuMatrixAddMatMatElements<Real>();
+  UnitTestCuMatrixSetMatMatDivMat<Real>();
   UnitTestCuTanh<Real>();
   UnitTestCuCholesky<Real>();
   UnitTestCuDiffTanh<Real>();
@@ -2505,17 +3059,41 @@ template<typename Real> void CudaMatrixUnitTest() {
 
 
 int main() {
-  for (int32 loop = 0; loop < 2; loop++) {
+  SetVerboseLevel(1);
+  int32 loop = 0;
+  bool test_threads = true;
+  // num_threads only matters if test_threads == true.   Don't make it
+  // to large, because it will affect CPU usage if you are using CPU.
+  int32 num_threads = 4;
+
+
 #if HAVE_CUDA == 1
+  for (loop = 0; loop < 2; loop++) {
+    CuDevice::Instantiate().SetDebugStrideMode(true);
+    if (test_threads)
+      CuDevice::Instantiate().AllowMultithreading();
     if (loop == 0)
       CuDevice::Instantiate().SelectGpuId("no");
     else
       CuDevice::Instantiate().SelectGpuId("yes");
 #endif
 
-    kaldi::CudaMatrixUnitTest<float>();
+    if (test_threads) {
+      KALDI_LOG << "Doing matrix unit test with "
+                << num_threads << " threads.";
+      std::vector<std::thread*> threads;
+      for (int32 i = 0;  i < num_threads - 1; i++)
+        threads.push_back(new std::thread(kaldi::CudaMatrixUnitTest<float>));
+      // the last thread running is the main thread.
+      kaldi::CudaMatrixUnitTest<float>();
+      for (size_t i = 0; i < threads.size(); i++) {
+        threads[i]->join();
+        delete threads[i];
+      }
+    } else {
+      kaldi::CudaMatrixUnitTest<float>();
+    }
 
-    
 #if HAVE_CUDA == 1
     if (CuDevice::Instantiate().DoublePrecisionSupported()) {
       kaldi::CudaMatrixUnitTest<double>();
@@ -2530,11 +3108,9 @@ int main() {
       KALDI_LOG << "Tests without GPU use succeeded.";
     else
       KALDI_LOG << "Tests with GPU use (if available) succeeded.";
-  }
-  SetVerboseLevel(4);
 #if HAVE_CUDA == 1
+  } // No for loop if 'HAVE_CUDA != 1',
   CuDevice::Instantiate().PrintProfile();
 #endif
   return 0;
 }
-

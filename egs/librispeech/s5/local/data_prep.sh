@@ -1,6 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Copyright 2014  Vassil Panayotov 
+# Copyright 2014  Vassil Panayotov
 #           2014  Johns Hopkins University (author: Daniel Povey)
 # Apache 2.0
 
@@ -32,7 +32,7 @@ trans=$dst/text; [[ -f "$trans" ]] && rm $trans
 utt2spk=$dst/utt2spk; [[ -f "$utt2spk" ]] && rm $utt2spk
 spk2gender=$dst/spk2gender; [[ -f $spk2gender ]] && rm $spk2gender
 
-for reader_dir in $(find $src -mindepth 1 -maxdepth 1 -type d | sort); do
+for reader_dir in $(find -L $src -mindepth 1 -maxdepth 1 -type d | sort); do
   reader=$(basename $reader_dir)
   if ! [ $reader -eq $reader ]; then  # not integer.
     echo "$0: unexpected subdirectory name $reader"
@@ -52,7 +52,7 @@ for reader_dir in $(find $src -mindepth 1 -maxdepth 1 -type d | sort); do
       exit 1;
     fi
 
-    find $chapter_dir/ -iname "*.flac" | sort | xargs -I% basename % .flac | \
+    find -L $chapter_dir/ -iname "*.flac" | sort | xargs -I% basename % .flac | \
       awk -v "dir=$chapter_dir" '{printf "%s flac -c -d -s %s/%s.flac |\n", $0, dir, $0}' >>$wav_scp|| exit 1
 
     chapter_trans=$chapter_dir/${reader}-${chapter}.trans.txt

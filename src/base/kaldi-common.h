@@ -28,14 +28,14 @@
 #include <stdexcept>
 #include <cassert>
 #include <vector>
-#include <iostream>  
-#include <fstream>  
+#include <iostream>
+#include <fstream>
 
 #include "base/kaldi-utils.h"
 #include "base/kaldi-error.h"
 #include "base/kaldi-types.h"
 #include "base/io-funcs.h"
 #include "base/kaldi-math.h"
+#include "base/timer.h"
 
 #endif  // KALDI_BASE_KALDI_COMMON_H_
-

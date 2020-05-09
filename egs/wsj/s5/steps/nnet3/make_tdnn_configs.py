@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 
+# This script is deprecated, please use ../xconfig_to_configs.py
+
 # we're using python 3.x style print but want it to work in python 2.x,
 from __future__ import print_function
 import re, os, argparse, sys, math, warnings
-
 
 
 parser = argparse.ArgumentParser(description="Writes config files and variables "
@@ -15,6 +16,11 @@ parser.add_argument("--feat-dim", type=int,
                     help="Raw feature dimension, e.g. 13")
 parser.add_argument("--ivector-dim", type=int,
                     help="iVector dimension, e.g. 100", default=0)
+parser.add_argument("--include-log-softmax", type=str,
+                    help="add the final softmax layer ", default="true", choices = ["false", "true"])
+parser.add_argument("--final-layer-normalize-target", type=float,
+                    help="RMS target for final layer (set to <1 if final layer learns too fast",
+                    default=1.0)
 parser.add_argument("--pnorm-input-dim", type=int,
                     help="input dimension to p-norm nonlinearities")
 parser.add_argument("--pnorm-output-dim", type=int,
@@ -41,8 +47,8 @@ if args.splice_indexes is None:
     sys.exit("--splice-indexes argument is required");
 if args.feat_dim is None or not (args.feat_dim > 0):
     sys.exit("--feat-dim argument is required");
-if args.num_targets is None or not (args.feat_dim > 0):
-    sys.exit("--feat-dim argument is required");
+if args.num_targets is None or not (args.num_targets > 0):
+    sys.exit("--num-targets argument is required");
 if not args.relu_dim is None:
     if not args.pnorm_input_dim is None or not args.pnorm_output_dim is None:
         sys.exit("--relu-dim argument not compatible with "
@@ -65,7 +71,7 @@ else:
 splice_array = []
 left_context = 0
 right_context = 0
-split1 = args.splice_indexes.split(" ");  # we already checked the string is nonempty.
+split1 = args.splice_indexes.split();  # we already checked the string is nonempty.
 if len(split1) < 1:
     sys.exit("invalid --splice-indexes argument, too short: "
              + args.splice_indexes)
@@ -85,28 +91,28 @@ try:
         right_context += int_list[-1]
         splice_array.append(int_list)
 except ValueError as e:
-    sys.exit("invalid --splice-indexes argument " + args.splice_indexes + e)
+    sys.exit("invalid --splice-indexes argument " + args.splice_indexes + str(e))
 left_context = max(0, left_context)
 right_context = max(0, right_context)
 num_hidden_layers = len(splice_array)
 input_dim = len(splice_array[0]) * args.feat_dim  +  args.ivector_dim
 
 f = open(args.config_dir + "/vars", "w")
-print('left_context=' + str(left_context), file=f)
-print('right_context=' + str(right_context), file=f)
+print('left_context={}'.format(left_context), file=f)
+print('right_context={}'.format(right_context), file=f)
 # the initial l/r contexts are actually not needed.
 # print('initial_left_context=' + str(splice_array[0][0]), file=f)
 # print('initial_right_context=' + str(splice_array[0][-1]), file=f)
-print('num_hidden_layers=' + str(num_hidden_layers), file=f)
+print('num_hidden_layers={}'.format(num_hidden_layers), file=f)
 f.close()
 
 f = open(args.config_dir + "/init.config", "w")
 print('# Config file for initializing neural network prior to', file=f)
 print('# preconditioning matrix computation', file=f)
-print('input-node name=input dim=' + str(args.feat_dim), file=f)
+print('input-node name=input dim={}'.format(args.feat_dim), file=f)
 list=[ ('Offset(input, {0})'.format(n) if n != 0 else 'input' ) for n in splice_array[0] ]
 if args.ivector_dim > 0:
-    print('input-node name=ivector dim=' + str(args.ivector_dim), file=f)
+    print('input-node name=ivector dim={}'.format(args.ivector_dim), file=f)
     list.append('ReplaceIndex(ivector, t, 0)')
 # example of next line:
 # output-node name=output input="Append(Offset(input, -3), Offset(input, -2), Offset(input, -1), ... , Offset(input, 3), ReplaceIndex(ivector, t, 0))"
@@ -132,20 +138,22 @@ for l in range(1, num_hidden_layers + 1):
         print('# In nnet3 framework, p in P-norm is always 2.', file=f)
         print('component name=nonlin{0} type=PnormComponent input-dim={1} output-dim={2}'.
               format(l, args.pnorm_input_dim, args.pnorm_output_dim), file=f)
-    print('component name=renorm{0} type=NormalizeComponent dim={1}'.format(
-         l, nonlin_output_dim), file=f)
+    print('component name=renorm{0} type=NormalizeComponent dim={1} target-rms={2}'.format(
+        l, nonlin_output_dim,
+        (1.0 if l < num_hidden_layers else args.final_layer_normalize_target)), file=f)
     print('component name=final-affine type=NaturalGradientAffineComponent '
           'input-dim={0} output-dim={1} param-stddev=0 bias-stddev=0'.format(
           nonlin_output_dim, args.num_targets), file=f)
     # printing out the next two, and their component-nodes, for l > 1 is not
     # really necessary as they will already exist, but it doesn't hurt and makes
     # the structure clearer.
-    if use_presoftmax_prior_scale :
-        print('component name=final-fixed-scale type=FixedScaleComponent '
-            'scales={0}/presoftmax_prior_scale.vec'.format(
-            args.config_dir), file=f)
-    print('component name=final-log-softmax type=LogSoftmaxComponent dim={0}'.format(
-          args.num_targets), file=f)
+    if args.include_log_softmax == "true":
+        if use_presoftmax_prior_scale :
+            print('component name=final-fixed-scale type=FixedScaleComponent '
+                  'scales={0}/presoftmax_prior_scale.vec'.format(
+                    args.config_dir), file=f)
+        print('component name=final-log-softmax type=LogSoftmaxComponent dim={0}'.format(
+                args.num_targets), file=f)
     print('# Now for the network structure', file=f)
     if l == 1:
         splices = [ ('Offset(input, {0})'.format(n) if n != 0 else 'input') for n in splice_array[l-1] ]
@@ -170,16 +178,18 @@ for l in range(1, num_hidden_layers + 1):
     print('component-node name=final-affine component=final-affine input=renorm{0}'.
           format(l), file=f)
 
-    if use_presoftmax_prior_scale:
-        print('component-node name=final-fixed-scale component=final-fixed-scale input=final-affine',
-              file=f)
-        print('component-node name=final-log-softmax component=final-log-softmax '
-              'input=final-fixed-scale', file=f)
+    if args.include_log_softmax == "true":
+        if use_presoftmax_prior_scale:
+            print('component-node name=final-fixed-scale component=final-fixed-scale input=final-affine',
+                  file=f)
+            print('component-node name=final-log-softmax component=final-log-softmax '
+                  'input=final-fixed-scale', file=f)
+        else:
+            print('component-node name=final-log-softmax component=final-log-softmax '
+                  'input=final-affine', file=f)
+        print('output-node name=output input=final-log-softmax', file=f)
     else:
-        print('component-node name=final-log-softmax component=final-log-softmax '
-              'input=final-affine', file=f)
-
-    print('output-node name=output input=final-log-softmax', file=f)
+        print('output-node name=output input=final-affine', file=f)
     f.close()
 
 # component name=nonlin1 type=PnormComponent input-dim=$pnorm_input_dim output-dim=$pnorm_output_dim
